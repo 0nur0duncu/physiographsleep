@@ -20,20 +20,23 @@ class Evaluator:
         model: torch.nn.Module,
         dataloader: DataLoader,
         spectral_extractor=None,
-    ) -> dict[str, float]:
+        return_logits: bool = False,
+    ) -> dict[str, float] | tuple[dict[str, float], np.ndarray, np.ndarray]:
         """Run evaluation on a dataloader.
 
         Args:
             model: trained model in eval mode
             dataloader: validation or test DataLoader
             spectral_extractor: SpectralFeatureExtractor instance
+            return_logits: if True, also return (logits, labels) arrays
 
         Returns:
-            metrics dict with accuracy, macro_f1, kappa, per-class F1
+            metrics dict, or (metrics, logits, labels) if return_logits=True
         """
         model.eval()
         all_preds = []
         all_labels = []
+        all_logits = []
 
         for batch in dataloader:
             signals = batch["signal"].to(self.device)       # (B, L, C, T)
@@ -47,15 +50,23 @@ class Evaluator:
                 spectral = self._extract_spectral_batch(signals, spectral_extractor)
 
             outputs = model(signals, spectral)
-            preds = outputs["stage"].argmax(dim=-1)  # (B,)
+            logits = outputs["stage"]              # (B, 5)
+            preds = logits.argmax(dim=-1)          # (B,)
 
             all_preds.append(preds.cpu().numpy())
             all_labels.append(labels.cpu().numpy())
+            if return_logits:
+                all_logits.append(logits.cpu().numpy())
 
         all_preds = np.concatenate(all_preds)
         all_labels = np.concatenate(all_labels)
+        metrics = self.metrics.compute_all(all_labels, all_preds)
 
-        return self.metrics.compute_all(all_labels, all_preds)
+        if return_logits:
+            all_logits = np.concatenate(all_logits)
+            return metrics, all_logits, all_labels
+
+        return metrics
 
     @staticmethod
     def _extract_spectral_batch(
