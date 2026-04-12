@@ -27,12 +27,12 @@ class LossConfig:
     """Multi-task loss weights and settings."""
 
     stage_weight: float = 1.0
-    boundary_weight: float = 0.25
+    boundary_weight: float = 0.35
     prev_stage_weight: float = 0.20
     next_stage_weight: float = 0.20
-    n1_aux_weight: float = 0.15
-    focal_gamma: float = 2.0
-    label_smoothing: float = 0.05
+    n1_aux_weight: float = 0.30
+    focal_gamma: float = 3.0
+    label_smoothing: float = 0.02
 
 
 @dataclass
@@ -44,11 +44,11 @@ class CurriculumConfig:
     stage_a_lr: float = 1e-3
 
     # Stage B: sequence decoder (encoder frozen)
-    stage_b_epochs: int = 20
+    stage_b_epochs: int = 25
     stage_b_lr: float = 5e-4
 
     # Stage C: end-to-end fine-tune
-    stage_c_epochs: int = 15
+    stage_c_epochs: int = 25
     stage_c_lr: float = 1e-4
 
 

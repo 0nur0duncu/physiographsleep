@@ -17,8 +17,8 @@ def build_weighted_sampler(labels: np.ndarray) -> WeightedRandomSampler:
     class_counts = np.bincount(labels, minlength=5).astype(np.float64)
     class_weights = 1.0 / (class_counts + 1e-6)
 
-    # Extra boost for N1 (class 1)
-    class_weights[1] *= 1.5
+    # Extra boost for N1 (class 1) — aggressive oversampling for extreme minority
+    class_weights[1] *= 4.0
 
     # Normalize
     class_weights /= class_weights.sum()

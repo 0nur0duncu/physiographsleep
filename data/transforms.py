@@ -41,6 +41,9 @@ class SleepTransforms:
         if np.random.random() < 0.5:
             epoch = self._amplitude_scale(epoch)
 
+        if np.random.random() < 0.3:
+            epoch = self._time_mask(epoch)
+
         return epoch
 
     def _add_noise(self, epoch: np.ndarray) -> np.ndarray:
@@ -58,3 +61,15 @@ class SleepTransforms:
         low, high = self.scale_range
         scale = np.random.uniform(low, high)
         return epoch * scale
+
+    def _time_mask(self, epoch: np.ndarray) -> np.ndarray:
+        """Zero out a random contiguous segment (SpecAugment-style time masking).
+
+        Masks 5-15% of the epoch duration, forcing the model to use
+        broader temporal context rather than relying on any single segment.
+        """
+        T = epoch.shape[-1]
+        mask_len = np.random.randint(T // 20, T // 7 + 1)  # 5-14% of T
+        start = np.random.randint(0, T - mask_len)
+        epoch[..., start : start + mask_len] = 0.0
+        return epoch

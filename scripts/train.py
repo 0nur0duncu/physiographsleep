@@ -103,9 +103,20 @@ def main() -> None:
     class_counts = np.bincount(data["train"]["labels"], minlength=5)
     class_weights = 1.0 / (class_counts.astype(np.float32) + 1e-6)
     class_weights = class_weights / class_weights.sum() * 5
+
+    # v2: Extra N1 (class 1) weight boost
+    class_weights[1] *= 2.5
+
     class_weights_tensor = torch.from_numpy(class_weights).float()
 
-    loss_fn = MultiTaskLoss(config.train.loss, class_weights=class_weights_tensor)
+    # v2: Per-class gamma — higher gamma for N1
+    per_class_gamma = {1: 4.0}
+
+    loss_fn = MultiTaskLoss(
+        config.train.loss,
+        class_weights=class_weights_tensor,
+        per_class_gamma=per_class_gamma,
+    )
 
     # Spectral extractor
     spectral = SpectralFeatureExtractor(config.data)

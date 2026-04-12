@@ -15,17 +15,23 @@ from ..configs.train_config import LossConfig
 
 
 class FocalLoss(nn.Module):
-    """Focal loss with optional class weights and label smoothing."""
+    """Focal loss with optional class weights, per-class gamma, and label smoothing.
+
+    When per_class_gamma is provided, each class can have a different focusing
+    parameter, allowing more aggressive mining for minority classes (e.g., N1).
+    """
 
     def __init__(
         self,
         gamma: float = 2.0,
         weight: torch.Tensor | None = None,
         label_smoothing: float = 0.0,
+        per_class_gamma: dict[int, float] | None = None,
     ):
         super().__init__()
         self.gamma = gamma
         self.label_smoothing = label_smoothing
+        self.per_class_gamma = per_class_gamma  # e.g. {1: 4.0} for N1
         self.register_buffer("weight", weight)
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -44,7 +50,16 @@ class FocalLoss(nn.Module):
             label_smoothing=self.label_smoothing,
         )
         pt = torch.exp(-ce)
-        focal = ((1 - pt) ** self.gamma) * ce
+
+        if self.per_class_gamma:
+            # Build per-sample gamma based on target class
+            gamma = torch.full_like(ce, self.gamma)
+            for cls_id, cls_gamma in self.per_class_gamma.items():
+                gamma[targets == cls_id] = cls_gamma
+            focal = ((1 - pt) ** gamma) * ce
+        else:
+            focal = ((1 - pt) ** self.gamma) * ce
+
         return focal.mean()
 
 
@@ -55,6 +70,7 @@ class MultiTaskLoss(nn.Module):
         self,
         config: LossConfig,
         class_weights: torch.Tensor | None = None,
+        per_class_gamma: dict[int, float] | None = None,
     ):
         super().__init__()
         self.config = config
@@ -63,6 +79,7 @@ class MultiTaskLoss(nn.Module):
             gamma=config.focal_gamma,
             weight=class_weights,
             label_smoothing=config.label_smoothing,
+            per_class_gamma=per_class_gamma,
         )
         self.bce = nn.BCEWithLogitsLoss()
         self.ce = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
