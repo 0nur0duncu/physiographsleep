@@ -46,16 +46,27 @@ class Trainer:
         self.checkpoint = ModelCheckpoint(config.checkpoint_dir, mode="max")
         self.best_metrics: dict[str, float] = {}
 
-    def train(self) -> dict[str, float]:
-        """Run full 3-stage curriculum training."""
-        logger.info("=== Stage A: Epoch encoder pretraining ===")
-        self._run_stage_a()
+    def train(self, start_stage: str = "A") -> dict[str, float]:
+        """Run curriculum training from a given stage.
 
-        logger.info("=== Stage B: Sequence decoder training ===")
-        self._run_stage_b()
+        Args:
+            start_stage: "A", "B", or "C" — which stage to begin from.
+                         Earlier stages are skipped (useful for resuming).
+        """
+        stages = ["A", "B", "C"]
+        start_idx = stages.index(start_stage.upper())
 
-        logger.info("=== Stage C: End-to-end fine-tuning ===")
-        self._run_stage_c()
+        if start_idx <= 0:
+            logger.info("=== Stage A: Epoch encoder pretraining ===")
+            self._run_stage_a()
+
+        if start_idx <= 1:
+            logger.info("=== Stage B: Sequence decoder training ===")
+            self._run_stage_b()
+
+        if start_idx <= 2:
+            logger.info("=== Stage C: End-to-end fine-tuning ===")
+            self._run_stage_c()
 
         return self.best_metrics
 
