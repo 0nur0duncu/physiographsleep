@@ -8,8 +8,8 @@ from ..configs.data_config import DataConfig
 class SleepTransforms:
     """Composable EEG augmentations for training.
 
-    Applied per-epoch (single epoch signal).
-    Augmentations: Gaussian noise, time shift, amplitude scaling.
+    Applied per-epoch or per-sequence (batch of epochs).
+    Augmentations: Gaussian noise, time shift, amplitude scaling, time masking.
     """
 
     def __init__(self, config: DataConfig):
@@ -45,6 +45,51 @@ class SleepTransforms:
             epoch = self._time_mask(epoch)
 
         return epoch
+
+    def transform_sequence(self, seq: np.ndarray) -> np.ndarray:
+        """Apply random augmentations to a sequence of epochs (vectorized).
+
+        Args:
+            seq: (L, C, T) — sequence of epochs
+
+        Returns:
+            Augmented sequence: (L, C, T)
+        """
+        if not self.enabled:
+            return seq
+
+        seq = seq.copy()
+        L = seq.shape[0]
+        T = seq.shape[-1]
+
+        # Gaussian noise — independent per epoch
+        noise_mask = np.random.random(L) < 0.5
+        if noise_mask.any():
+            noise = np.random.normal(0, self.noise_std, seq[noise_mask].shape)
+            seq[noise_mask] += noise.astype(seq.dtype)
+
+        # Amplitude scale — independent per epoch
+        scale_mask = np.random.random(L) < 0.5
+        n_scale = scale_mask.sum()
+        if n_scale > 0:
+            low, high = self.scale_range
+            scales = np.random.uniform(low, high, size=(n_scale, 1, 1)).astype(seq.dtype)
+            seq[scale_mask] *= scales
+
+        # Time shift — independent per epoch (needs loop, but cheap)
+        shift_mask = np.random.random(L) < 0.3
+        for i in np.where(shift_mask)[0]:
+            shift = np.random.randint(-self.shift_max, self.shift_max + 1)
+            seq[i] = np.roll(seq[i], shift, axis=-1)
+
+        # Time mask — independent per epoch (needs loop for variable mask length)
+        tmask_mask = np.random.random(L) < 0.3
+        for i in np.where(tmask_mask)[0]:
+            mask_len = np.random.randint(T // 20, T // 7 + 1)
+            start = np.random.randint(0, T - mask_len)
+            seq[i, ..., start : start + mask_len] = 0.0
+
+        return seq
 
     def _add_noise(self, epoch: np.ndarray) -> np.ndarray:
         """Add Gaussian noise."""

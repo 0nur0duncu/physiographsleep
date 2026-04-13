@@ -82,35 +82,30 @@ class SleepEDFDataset(Dataset):
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         start = idx - self.half
         end = idx + self.half + 1
+
+        # Determine valid vs padding indices
         seq_indices = np.arange(start, end)
+        valid_mask = (seq_indices >= 0) & (seq_indices < self.num_epochs)
+        valid_indices = seq_indices[valid_mask]
 
-        # Collect sequence with boundary padding
-        seq_data = []
-        seq_labels = []
-        seq_spectral = []
-        mask = []
+        # Allocate sequence arrays
+        L = self.seq_len
+        C, T = self.epochs.shape[1], self.epochs.shape[2]
+        seq_data = np.zeros((L, C, T), dtype=self.epochs.dtype)
+        seq_labels = np.zeros(L, dtype=np.int64)
+        mask = np.zeros(L, dtype=np.float32)
 
-        for i in seq_indices:
-            if 0 <= i < self.num_epochs:
-                epoch = self.epochs[i].copy()
-                if self.transform is not None:
-                    epoch = self.transform(epoch)
-                seq_data.append(epoch)
-                seq_labels.append(self.labels[i])
-                if self.spectral is not None:
-                    seq_spectral.append(self.spectral[i])
-                mask.append(1)
-            else:
-                # Zero-pad for out-of-range epochs
-                seq_data.append(np.zeros_like(self.epochs[0]))
-                seq_labels.append(0)
-                if self.spectral is not None:
-                    seq_spectral.append(np.zeros_like(self.spectral[0]))
-                mask.append(0)
+        # Vectorized copy of valid epochs
+        valid_positions = np.where(valid_mask)[0]
+        seq_data[valid_positions] = self.epochs[valid_indices]
+        seq_labels[valid_positions] = self.labels[valid_indices]
+        mask[valid_positions] = 1.0
 
-        seq_data = np.stack(seq_data, axis=0)  # (L, C, T)
-        seq_labels = np.array(seq_labels, dtype=np.int64)
-        mask = np.array(mask, dtype=np.float32)
+        # Apply augmentation to entire sequence at once
+        if self.transform is not None:
+            seq_data[valid_positions] = self.transform.transform_sequence(
+                seq_data[valid_positions]
+            )
 
         center_label = self.labels[idx]
 
@@ -139,9 +134,10 @@ class SleepEDFDataset(Dataset):
             "n1_label": torch.tensor(n1_label, dtype=torch.float),
         }
 
-        if seq_spectral:
-            result["spectral"] = torch.from_numpy(
-                np.stack(seq_spectral, axis=0)
-            ).float()  # (L, 5, 42)
+        if self.spectral is not None:
+            spec_data = np.zeros((L, self.spectral.shape[1], self.spectral.shape[2]),
+                                 dtype=self.spectral.dtype)
+            spec_data[valid_positions] = self.spectral[valid_indices]
+            result["spectral"] = torch.from_numpy(spec_data).float()  # (L, 5, 42)
 
         return result
