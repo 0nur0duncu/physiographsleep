@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.amp import GradScaler, autocast
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
@@ -62,6 +63,8 @@ class Trainer:
         self.spectral_extractor = spectral_extractor
         self.evaluator = Evaluator(device)
         self.best_metrics: dict[str, float] = {}
+        self.scaler = GradScaler("cuda", enabled=device.type == "cuda")
+        self.amp_enabled = device.type == "cuda"
 
     def _build_train_loader(self, n1_boost: float | None = None) -> DataLoader:
         """Build a training DataLoader with optional N1-boosted sampling."""
@@ -74,6 +77,8 @@ class Trainer:
                 num_workers=self.data_config.num_workers,
                 pin_memory=True,
                 drop_last=True,
+                persistent_workers=self.data_config.num_workers > 0,
+                prefetch_factor=2 if self.data_config.num_workers > 0 else None,
             )
         return DataLoader(
             self.train_dataset,
@@ -82,6 +87,8 @@ class Trainer:
             num_workers=self.data_config.num_workers,
             pin_memory=True,
             drop_last=True,
+            persistent_workers=self.data_config.num_workers > 0,
+            prefetch_factor=2 if self.data_config.num_workers > 0 else None,
         )
 
     def _load_stage_checkpoint(self, stage: str) -> bool:
@@ -265,15 +272,19 @@ class Trainer:
             }
 
             mask = batch["mask"].to(self.device) if "mask" in batch else None
-            predictions = self.model(signals, spectral, mask)
-            losses = self.loss_fn(predictions, targets)
+
+            with autocast("cuda", enabled=self.amp_enabled):
+                predictions = self.model(signals, spectral, mask)
+                losses = self.loss_fn(predictions, targets)
 
             optimizer.zero_grad()
-            losses["total"].backward()
+            self.scaler.scale(losses["total"]).backward()
+            self.scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), self.config.optimizer.grad_clip,
             )
-            optimizer.step()
+            self.scaler.step(optimizer)
+            self.scaler.update()
 
             total_loss += losses["total"].item()
             num_batches += 1
