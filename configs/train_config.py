@@ -17,7 +17,7 @@ class OptimizerConfig:
 class SchedulerConfig:
     """Learning rate scheduler settings."""
 
-    t_0: int = 10
+    t_0: int = 30
     t_mult: int = 2
     eta_min: float = 1e-6
 
@@ -41,7 +41,7 @@ class AdaptiveLossConfig:
 
     warmup_epochs: int = 5
     K: float = 10.0
-    gamma: float = 1.0
+    gamma: float = 2.0
 
 
 @dataclass
@@ -73,7 +73,7 @@ class TrainConfig:
 
     # General
     max_epochs: int = 80  # sum of curriculum stages (30+25+25)
-    patience: int = 10
+    patience: int = 15
     val_interval: int = 1
 
     # Logging
