@@ -31,8 +31,17 @@ class LossConfig:
     prev_stage_weight: float = 0.20
     next_stage_weight: float = 0.20
     n1_aux_weight: float = 0.30
-    focal_gamma: float = 3.0
-    label_smoothing: float = 0.02
+    focal_gamma: float = 2.0
+    label_smoothing: float = 0.05
+
+
+@dataclass
+class AdaptiveLossConfig:
+    """Adaptive F1-based loss weight settings (SeriesSleepNet-inspired)."""
+
+    warmup_epochs: int = 5
+    K: float = 10.0
+    gamma: float = 1.0
 
 
 @dataclass
@@ -45,7 +54,7 @@ class CurriculumConfig:
 
     # Stage B: sequence decoder (encoder frozen)
     stage_b_epochs: int = 25
-    stage_b_lr: float = 5e-4
+    stage_b_lr: float = 1e-4
 
     # Stage C: end-to-end fine-tune
     stage_c_epochs: int = 25
@@ -60,9 +69,10 @@ class TrainConfig:
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     loss: LossConfig = field(default_factory=LossConfig)
     curriculum: CurriculumConfig = field(default_factory=CurriculumConfig)
+    adaptive_loss: AdaptiveLossConfig = field(default_factory=AdaptiveLossConfig)
 
     # General
-    max_epochs: int = 65  # sum of curriculum stages
+    max_epochs: int = 80  # sum of curriculum stages (30+25+25)
     patience: int = 10
     val_interval: int = 1
 

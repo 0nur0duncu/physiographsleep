@@ -5,11 +5,15 @@ import torch
 from torch.utils.data import WeightedRandomSampler
 
 
-def build_weighted_sampler(labels: np.ndarray) -> WeightedRandomSampler:
+def build_weighted_sampler(
+    labels: np.ndarray,
+    n1_boost: float = 2.0,
+) -> WeightedRandomSampler:
     """Create a WeightedRandomSampler that oversamples minority classes.
 
     Args:
         labels: (N,) integer labels 0–4
+        n1_boost: extra multiplier for N1 (class 1) sampling weight
 
     Returns:
         WeightedRandomSampler instance
@@ -17,10 +21,9 @@ def build_weighted_sampler(labels: np.ndarray) -> WeightedRandomSampler:
     class_counts = np.bincount(labels, minlength=5).astype(np.float64)
     class_weights = 1.0 / (class_counts + 1e-6)
 
-    # Extra boost for N1 (class 1) — aggressive oversampling for extreme minority
-    class_weights[1] *= 4.0
+    if n1_boost > 1.0:
+        class_weights[1] *= n1_boost
 
-    # Normalize
     class_weights /= class_weights.sum()
 
     sample_weights = class_weights[labels]

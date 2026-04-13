@@ -7,6 +7,7 @@ Combines:
   - BCE for N1-aux
 """
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,11 +16,7 @@ from ..configs.train_config import LossConfig
 
 
 class FocalLoss(nn.Module):
-    """Focal loss with optional class weights, per-class gamma, and label smoothing.
-
-    When per_class_gamma is provided, each class can have a different focusing
-    parameter, allowing more aggressive mining for minority classes (e.g., N1).
-    """
+    """Focal loss with optional class weights, per-class gamma, and label smoothing."""
 
     def __init__(
         self,
@@ -31,18 +28,10 @@ class FocalLoss(nn.Module):
         super().__init__()
         self.gamma = gamma
         self.label_smoothing = label_smoothing
-        self.per_class_gamma = per_class_gamma  # e.g. {1: 4.0} for N1
+        self.per_class_gamma = per_class_gamma
         self.register_buffer("weight", weight)
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            logits: (B, C) raw logits
-            targets: (B,) integer labels
-
-        Returns:
-            scalar loss
-        """
         ce = F.cross_entropy(
             logits, targets,
             weight=self.weight,
@@ -52,7 +41,6 @@ class FocalLoss(nn.Module):
         pt = torch.exp(-ce)
 
         if self.per_class_gamma:
-            # Build per-sample gamma based on target class
             gamma = torch.full_like(ce, self.gamma)
             for cls_id, cls_gamma in self.per_class_gamma.items():
                 gamma[targets == cls_id] = cls_gamma
@@ -84,19 +72,33 @@ class MultiTaskLoss(nn.Module):
         self.bce = nn.BCEWithLogitsLoss()
         self.ce = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
 
+    def update_adaptive_weights(
+        self,
+        class_f1: np.ndarray,
+        K: float = 10.0,
+        gamma: float = 3.0,
+        eps: float = 1e-4,
+    ) -> None:
+        """Update focal loss class weights based on per-class F1 scores.
+
+        Adaptive weighting inspired by SeriesSleepNet (Lee et al., 2023):
+        W_i = K / (CF_i + eps)^gamma
+        """
+        f1_clipped = np.clip(class_f1, eps, None)
+        adaptive = K / np.power(f1_clipped, gamma)
+        adaptive = adaptive / adaptive.sum() * len(adaptive)
+        weight_tensor = torch.tensor(adaptive, dtype=torch.float32)
+        if self.focal.weight is not None:
+            self.focal.weight.copy_(weight_tensor.to(self.focal.weight.device))
+        else:
+            device = next(self.parameters()).device
+            self.focal.register_buffer("weight", weight_tensor.to(device))
+
     def forward(
         self,
         predictions: dict[str, torch.Tensor],
         targets: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
-        """
-        Args:
-            predictions: dict from MultiTaskHeads
-            targets: dict with label, boundary, prev_label, next_label, n1_label
-
-        Returns:
-            dict with individual losses and total
-        """
         losses = {}
 
         losses["stage"] = self.focal(predictions["stage"], targets["label"])

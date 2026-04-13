@@ -25,7 +25,6 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parents[2]
 from physiographsleep.configs import ExperimentConfig
 from physiographsleep.data.dataset import SleepEDFDataset
 from physiographsleep.data.loader import load_sleep_edf
-from physiographsleep.data.sampler import build_weighted_sampler
 from physiographsleep.data.spectral import SpectralFeatureExtractor
 from physiographsleep.data.transforms import SleepTransforms
 from physiographsleep.models.losses import MultiTaskLoss
@@ -42,6 +41,7 @@ def main() -> None:
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--data-dir", type=str, default="physiographsleep/dataset/sleep-edfx")
+    parser.add_argument("--start-stage", type=str, default="A", choices=["A", "B", "C"])
     args = parser.parse_args()
 
     # Config
@@ -77,15 +77,7 @@ def main() -> None:
         spectral=data["val"].get("spectral"),
     )
 
-    # Sampler
-    sampler = build_weighted_sampler(data["train"]["labels"])
-
     # DataLoaders
-    train_loader = DataLoader(
-        train_ds, batch_size=config.data.batch_size,
-        sampler=sampler, num_workers=config.data.num_workers,
-        pin_memory=config.data.pin_memory, drop_last=True,
-    )
     val_loader = DataLoader(
         val_ds, batch_size=config.data.batch_size,
         shuffle=False, num_workers=config.data.num_workers,
@@ -104,18 +96,11 @@ def main() -> None:
     class_weights = 1.0 / (class_counts.astype(np.float32) + 1e-6)
     class_weights = class_weights / class_weights.sum() * 5
 
-    # v2: Extra N1 (class 1) weight boost
-    class_weights[1] *= 2.5
-
     class_weights_tensor = torch.from_numpy(class_weights).float()
-
-    # v2: Per-class gamma — higher gamma for N1
-    per_class_gamma = {1: 4.0}
 
     loss_fn = MultiTaskLoss(
         config.train.loss,
         class_weights=class_weights_tensor,
-        per_class_gamma=per_class_gamma,
     )
 
     # Spectral extractor
@@ -125,16 +110,18 @@ def main() -> None:
     trainer = Trainer(
         model=model,
         loss_fn=loss_fn,
-        train_loader=train_loader,
+        train_dataset=train_ds,
+        train_labels=data["train"]["labels"],
         val_loader=val_loader,
         config=config.train,
+        data_config=config.data,
         device=device,
         spectral_extractor=spectral,
     )
 
     # Train
-    logger.info("Starting training...")
-    best_metrics = trainer.train()
+    logger.info(f"Starting training from Stage {args.start_stage}...")
+    best_metrics = trainer.train(start_stage=args.start_stage)
 
     logger.info("Training complete!")
     from physiographsleep.evaluation.metrics import MetricsCalculator
