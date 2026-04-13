@@ -71,15 +71,11 @@ class PhysioGraphSleep(nn.Module):
         """
         B, L, C, T = signals.shape
 
-        # Encode each epoch independently
-        epoch_embeddings = []
-        for t in range(L):
-            sig_t = signals[:, t, :, :]          # (B, C, T)
-            spec_t = spectral_features[:, t, :, :]  # (B, 5, 42)
-            emb_t = self.encode_epoch(sig_t, spec_t)  # (B, 128)
-            epoch_embeddings.append(emb_t)
-
-        epoch_embeddings = torch.stack(epoch_embeddings, dim=1)  # (B, L, 128)
+        # Encode ALL epochs in one batched pass (B*L instead of looping L times)
+        flat_sig = signals.reshape(B * L, C, T)              # (B*L, C, T)
+        flat_spec = spectral_features.reshape(B * L, *spectral_features.shape[2:])  # (B*L, 5, 42)
+        flat_emb = self.encode_epoch(flat_sig, flat_spec)     # (B*L, 128)
+        epoch_embeddings = flat_emb.reshape(B, L, -1)         # (B, L, 128)
 
         # Decode sequence
         seq_features = self.sequence_decoder(epoch_embeddings, mask)  # (B, L, 160)

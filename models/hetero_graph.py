@@ -94,10 +94,9 @@ class HeteroGraphEncoder(nn.Module):
             patch_tokens, band_tokens,
         )
 
-        # Replace zero summary tokens with learned parameter
-        for i in range(B):
-            idx = i * NUM_NODES + SUMMARY_OFFSET
-            x[idx] = self.summary_token.squeeze(0)
+        # Replace zero summary tokens with learned parameter (vectorized)
+        summary_indices = torch.arange(B, device=device) * NUM_NODES + SUMMARY_OFFSET
+        x[summary_indices] = self.summary_token.expand(B, -1)
 
         num_nodes = x.shape[0]
 

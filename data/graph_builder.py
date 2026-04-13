@@ -136,27 +136,17 @@ def batch_epoch_graphs(
     edge_type_base = STATIC_EDGE_TYPE.to(device)
     E = edge_index_base.shape[1]
 
-    all_x = []
-    all_edge_index = []
-    all_edge_type = []
-    all_batch = []
+    # Vectorized graph batching — no Python loop
+    summary = torch.zeros(B, 1, d, device=device)
+    x = torch.cat([
+        patch_tokens_batch,           # (B, 6, D)
+        band_tokens_batch,            # (B, 5, D)
+        summary,                      # (B, 1, D)
+    ], dim=1).reshape(B * NUM_NODES, d)  # (B*12, D)
 
-    for i in range(B):
-        summary = torch.zeros(1, d, device=device)
-        x_i = torch.cat([
-            patch_tokens_batch[i],
-            band_tokens_batch[i],
-            summary,
-        ], dim=0)  # (12, D)
-
-        all_x.append(x_i)
-        all_edge_index.append(edge_index_base + i * NUM_NODES)
-        all_edge_type.append(edge_type_base)
-        all_batch.append(torch.full((NUM_NODES,), i, dtype=torch.long, device=device))
-
-    x = torch.cat(all_x, dim=0)
-    edge_index = torch.cat(all_edge_index, dim=1)
-    edge_type = torch.cat(all_edge_type, dim=0)
-    batch_id = torch.cat(all_batch, dim=0)
+    offsets = (torch.arange(B, device=device) * NUM_NODES).view(B, 1, 1)  # (B, 1, 1)
+    edge_index = (edge_index_base.unsqueeze(0) + offsets).permute(1, 0, 2).reshape(2, B * E)  # (2, B*E)
+    edge_type = edge_type_base.unsqueeze(0).expand(B, -1).reshape(B * E)  # (B*E,)
+    batch_id = torch.arange(B, device=device).unsqueeze(1).expand(B, NUM_NODES).reshape(B * NUM_NODES)  # (B*12,)
 
     return x, edge_index, edge_type, batch_id
