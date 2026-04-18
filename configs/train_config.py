@@ -21,14 +21,20 @@ class OptimizerConfig:
 
 @dataclass
 class SchedulerConfig:
-    """Plain cosine annealing (no restarts).
+    """Linear warmup + cosine annealing.
 
-    t_max should equal the total number of training epochs so that LR
-    smoothly decays from `lr` to `eta_min` across the full run.
+    t_max should equal the total number of training epochs.
+    The first `warmup_epochs` epochs linearly ramp LR from ~0 to peak;
+    the remaining epochs follow a cosine decay to `eta_min`.
+
+    Warmup prevents over-confident early updates that cause val_loss to
+    diverge from val_MF1 (FocalLoss + label_smoothing artifact). Standard
+    in SleepTransformer / AttnSleep / ViT literature.
     """
 
     t_max: int = 60
     eta_min: float = 1e-6
+    warmup_epochs: int = 5
 
 
 @dataclass
@@ -41,7 +47,7 @@ class LossConfig:
     next_stage_weight: float = 0.20
     n1_aux_weight: float = 0.30
     focal_gamma: float = 2.0
-    label_smoothing: float = 0.1
+    label_smoothing: float = 0.05
 
 
 @dataclass
