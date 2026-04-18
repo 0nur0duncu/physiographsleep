@@ -18,10 +18,13 @@ class OptimizerConfig:
 
 @dataclass
 class SchedulerConfig:
-    """Cosine annealing with warm restarts."""
+    """Plain cosine annealing (no restarts).
 
-    t_0: int = 30
-    t_mult: int = 2
+    t_max should equal the total number of training epochs so that LR
+    smoothly decays from `lr` to `eta_min` across the full run.
+    """
+
+    t_max: int = 60
     eta_min: float = 1e-6
 
 
@@ -59,8 +62,15 @@ class TrainConfig:
     # Single training schedule
     epochs: int = 60
     lr: float = 1e-3
-    n1_boost: float = 2.0
+    # Sampler inverse-frequency already gives N1 ~7x boost vs N2.
+    # Extra n1_boost multiplies on top; 2.0 -> effective 14x (too noisy,
+    # caused F1_N1 oscillation). 1.3 is a mild reinforcement that keeps
+    # N1 presence without drowning the batch in N1-like patterns.
+    n1_boost: float = 1.3
     patience: int = 12
+    # Exponential Moving Average of model weights. SleepTransformer /
+    # XSleepNet standard: stabilises val metrics + adds ~0.01-0.02 MF1.
+    ema_decay: float = 0.999
 
     # Logging
     log_dir: str = "logs"

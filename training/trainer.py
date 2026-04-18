@@ -29,6 +29,7 @@ from ..data.spectral import SpectralFeatureExtractor
 from ..models.losses import MultiTaskLoss
 from ..models.physiographsleep import PhysioGraphSleep
 from .callbacks import EarlyStopping, ModelCheckpoint
+from .ema import ModelEMA
 from .evaluator import Evaluator
 from .scheduler import build_scheduler
 from ..utils.io_utils import load_checkpoint
@@ -98,15 +99,25 @@ class Trainer:
         stopper = EarlyStopping(patience=self.config.patience)
         checkpoint = ModelCheckpoint(self.config.checkpoint_dir, mode="max")
 
+        # EMA: track decayed copy of live weights. Evaluated instead of
+        # the raw model for stable val metrics + small accuracy gain.
+        ema = ModelEMA(self.model, decay=self.config.ema_decay)
+
         for epoch in range(self.config.epochs):
-            train_loss, tr_preds, tr_labels = self._train_one_epoch(optimizer, loader)
+            train_loss, tr_preds, tr_labels = self._train_one_epoch(
+                optimizer, loader, ema=ema,
+            )
             train_metrics = self._train_metrics(tr_labels, tr_preds)
-            val_loss, val_metrics = self._evaluate_with_loss()
+            # Evaluate with EMA weights swapped into the live model.
+            with ema.swap_into(self.model):
+                val_loss, val_metrics = self._evaluate_with_loss()
 
             self._log_epoch(epoch, train_loss, val_loss, val_metrics, train_metrics)
             scheduler.step()
 
-            self._save_if_best(val_metrics, checkpoint)
+            # Save EMA state (not raw) as the best checkpoint — that is the
+            # inference model for downstream evaluation / post-processing.
+            self._save_if_best(val_metrics, checkpoint, state_dict=ema.ema.state_dict())
             if stopper.step(val_metrics["macro_f1"]):
                 logger.info(f"Early stop at epoch {epoch}")
                 break
@@ -155,9 +166,15 @@ class Trainer:
         )
 
     def _save_if_best(
-        self, metrics: dict[str, float], checkpoint: ModelCheckpoint,
+        self,
+        metrics: dict[str, float],
+        checkpoint: ModelCheckpoint,
+        state_dict: dict | None = None,
     ) -> None:
-        state = {"model": self.model.state_dict(), "metrics": metrics}
+        state = {
+            "model": state_dict if state_dict is not None else self.model.state_dict(),
+            "metrics": metrics,
+        }
         saved = checkpoint.step(
             metrics["macro_f1"], state, filename=self.config.checkpoint_name,
         )
@@ -175,6 +192,7 @@ class Trainer:
         self,
         optimizer: torch.optim.Optimizer,
         loader: DataLoader,
+        ema: ModelEMA | None = None,
     ) -> tuple[float, np.ndarray, np.ndarray]:
         self.model.train()
         total_loss = 0.0
@@ -214,12 +232,16 @@ class Trainer:
                 )
                 self.scaler.step(optimizer)
                 self.scaler.update()
+                if ema is not None:
+                    ema.update(self.model)
             else:
                 losses["total"].backward()
                 torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.config.optimizer.grad_clip,
                 )
                 optimizer.step()
+                if ema is not None:
+                    ema.update(self.model)
 
             total_loss += losses["total"].item()
             num_batches += 1
