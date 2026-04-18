@@ -8,7 +8,7 @@ class OptimizerConfig:
     """AdamW optimizer settings."""
 
     lr: float = 1e-3
-    weight_decay: float = 1e-2
+    weight_decay: float = 2e-2
     betas: tuple[float, float] = (0.9, 0.999)
     grad_clip: float = 1.0
 
@@ -32,7 +32,7 @@ class LossConfig:
     next_stage_weight: float = 0.20
     n1_aux_weight: float = 0.30
     focal_gamma: float = 2.0
-    label_smoothing: float = 0.05
+    label_smoothing: float = 0.1
 
 
 @dataclass

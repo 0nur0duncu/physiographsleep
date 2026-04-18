@@ -1,18 +1,27 @@
-"""Graph Transformer block — attention + FFN with residual and norm."""
+"""Graph Transformer block — attention + FFN with residual, norm, and DropPath."""
 
 import torch
 import torch.nn as nn
 
 from .graph_attention import EdgeAwareAttention
+from .drop_path import DropPath
 
 
 class GraphTransformerBlock(nn.Module):
     """One layer of Edge-Aware Graph Transformer.
 
-    attention → residual + norm → FFN → residual + norm
+    attention → drop_path → residual + norm → FFN → drop_path → residual + norm
+    DropPath (stochastic depth) improves generalization for deeper graph stacks.
     """
 
-    def __init__(self, dim: int, num_heads: int = 4, dropout: float = 0.2, ff_mult: int = 2):
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int = 4,
+        dropout: float = 0.2,
+        ff_mult: int = 2,
+        drop_path: float = 0.0,
+    ):
         super().__init__()
         self.attention = EdgeAwareAttention(dim, num_heads, dropout)
         self.norm1 = nn.LayerNorm(dim)
@@ -24,6 +33,7 @@ class GraphTransformerBlock(nn.Module):
             nn.Linear(dim * ff_mult, dim),
             nn.Dropout(dropout),
         )
+        self.drop_path = DropPath(drop_path)
 
     def forward(
         self,
@@ -42,8 +52,8 @@ class GraphTransformerBlock(nn.Module):
         Returns:
             (N, D) updated features
         """
-        # Multi-head attention + residual
-        x = x + self.attention(self.norm1(x), edge_index, edge_type, num_nodes)
-        # FFN + residual
-        x = x + self.ffn(self.norm2(x))
+        # Multi-head attention + DropPath + residual
+        x = x + self.drop_path(self.attention(self.norm1(x), edge_index, edge_type, num_nodes))
+        # FFN + DropPath + residual
+        x = x + self.drop_path(self.ffn(self.norm2(x)))
         return x

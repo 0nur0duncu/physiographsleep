@@ -36,9 +36,10 @@ class HeteroGraphConfig:
     node_dim: int = 96
     hidden_dim: int = 96
     out_dim: int = 128
-    num_heads: int = 4
-    num_layers: int = 2
+    num_heads: int = 6
+    num_layers: int = 3
     dropout: float = 0.2
+    drop_path: float = 0.1
     num_patch_nodes: int = 6
     num_band_nodes: int = 5
     num_summary_nodes: int = 1
