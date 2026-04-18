@@ -60,51 +60,13 @@ class MultiTaskLoss(nn.Module):
         self.bce = nn.BCEWithLogitsLoss()
         self.ce = nn.CrossEntropyLoss(label_smoothing=config.label_smoothing)
 
-    def update_adaptive_weights(
-        self,
-        class_f1: np.ndarray,
-        K: float = 5.0,
-        gamma: float = 1.0,
-        eps: float = 1e-2,
-        min_weight: float = 0.5,
-        max_weight: float = 3.0,
-        ema_momentum: float = 0.85,
-    ) -> None:
-        """Update focal loss class weights based on per-class F1 scores.
-
-        Adaptive weighting inspired by SeriesSleepNet (Lee et al., 2023):
-            W_i = K / (CF_i + eps)^gamma
-
-        Stabilized with:
-          - per-class min/max clipping (defaults 0.5 .. 5.0) to prevent the
-            K / F1^gamma blow-up when a class F1 is near zero,
-          - re-normalization to sum=num_classes after clipping,
-          - EMA smoothing against current weights to damp epoch-to-epoch
-            fluctuation (momentum=0.7 keeps 70% of previous weights).
-        """
-        f1_clipped = np.clip(class_f1, eps, None)
-        adaptive = K / np.power(f1_clipped, gamma)
-        adaptive = adaptive / adaptive.sum() * len(adaptive)
-        adaptive = np.clip(adaptive, min_weight, max_weight)
-        adaptive = adaptive / adaptive.sum() * len(adaptive)
-        new_w = torch.tensor(adaptive, dtype=torch.float32)
-
-        if self.focal.weight is not None:
-            prev = self.focal.weight.detach().to(new_w.device)
-            blended = ema_momentum * prev + (1.0 - ema_momentum) * new_w
-            blended = blended / blended.sum() * len(blended)
-            self.focal.weight.copy_(blended.to(self.focal.weight.device))
-        else:
-            device = next(self.parameters()).device
-            self.focal.register_buffer("weight", new_w.to(device))
-
     def forward(
         self,
         predictions: dict[str, torch.Tensor],
         targets: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
+        """Compute weighted multi-task loss for the center epoch."""
         losses = {}
-
         losses["stage"] = self.focal(predictions["stage"], targets["label"])
         losses["boundary"] = self.bce(predictions["boundary"], targets["boundary"])
         losses["prev"] = self.ce(predictions["prev"], targets["prev_label"])
@@ -118,6 +80,5 @@ class MultiTaskLoss(nn.Module):
             + self.config.next_stage_weight * losses["next"]
             + self.config.n1_aux_weight * losses["n1"]
         )
-
         losses["total"] = total
         return losses
