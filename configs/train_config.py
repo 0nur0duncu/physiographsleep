@@ -10,7 +10,10 @@ class OptimizerConfig:
     lr: float = 1e-3
     weight_decay: float = 2e-2
     betas: tuple[float, float] = (0.9, 0.999)
-    grad_clip: float = 1.0
+    # grad_clip=5.0 matches AttnSleep/SleepTransformer; 1.0 was too
+    # aggressive under AdamW + bfloat16 AMP (suppresses legitimate
+    # gradient signal especially early in training).
+    grad_clip: float = 5.0
 
 
 @dataclass

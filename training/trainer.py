@@ -88,11 +88,10 @@ class Trainer:
     # ------------------------------------------------------------------
     def train(self) -> dict[str, float]:
         """Run joint single-phase training. Returns best val metrics."""
-        # Auxiliary heads not used for joint loss propagation: keep frozen.
-        self._freeze_module(self.model.heads.boundary_head)
-        self._freeze_module(self.model.heads.prev_head)
-        self._freeze_module(self.model.heads.next_head)
-
+        # NOTE: All heads trainable. Freezing random-init aux heads while
+        # still including their CE/BCE in the total loss pushes the encoder
+        # to match random linear readouts — pure gradient noise that
+        # inflates val_loss and steals capacity from the main stage head.
         loader = self._build_train_loader(n1_boost=self.config.n1_boost)
         optimizer = self._build_optimizer(self.config.lr)
         scheduler = build_scheduler(optimizer, self.config.scheduler)
