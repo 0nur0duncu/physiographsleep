@@ -175,21 +175,15 @@ def run_one_fold(
     val_metrics = trainer.train()
     elapsed = time.time() - t0
 
-    # Final evaluation on the held-out *test* subjects
-    test_loss, test_metrics = trainer._evaluate_with_loss_external(test_loader) \
-        if hasattr(trainer, "_evaluate_with_loss_external") else (None, {})
-
-    # Fall back to internal evaluator if no external helper exists
-    if not test_metrics:
-        from physiographsleep.evaluation.evaluator import Evaluator
-        ev = Evaluator(device)
-        # Switch trainer.val_loader so we can reuse _evaluate_with_loss
-        old_loader = trainer.val_loader
-        trainer.val_loader = test_loader
-        try:
-            _, test_metrics = trainer._evaluate_with_loss()
-        finally:
-            trainer.val_loader = old_loader
+    # Final evaluation on the held-out *test* subjects.
+    # Trainer exposes `_evaluate_with_loss()` over `self.val_loader`,
+    # so we temporarily swap the loader to evaluate on the test fold.
+    old_loader = trainer.val_loader
+    trainer.val_loader = test_loader
+    try:
+        _, test_metrics = trainer._evaluate_with_loss()
+    finally:
+        trainer.val_loader = old_loader
 
     record = {
         "fold": fold_idx,

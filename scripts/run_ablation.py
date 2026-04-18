@@ -46,9 +46,7 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from physiographsleep.configs import ExperimentConfig
-from physiographsleep.configs.model_config import (
-    FusionConfig, HeteroGraphConfig, ModelConfig,
-)
+from physiographsleep.configs.model_config import FusionConfig
 from physiographsleep.configs.train_config import N1MixupConfig
 from physiographsleep.data.dataset import SleepEDFDataset
 from physiographsleep.data.loader import load_sleep_edf
@@ -64,21 +62,12 @@ from physiographsleep.utils.reproducibility import get_device, set_seed
 # ----------------------------------------------------------------------
 # Config patches per ablation
 # ----------------------------------------------------------------------
-def _disable_spectral(model: ModelConfig) -> ModelConfig:
-    """Hard-zero the spectral input by clipping num_bands to a tiny
-    no-op tensor — the cheapest way to drop the spectral branch
-    without rewriting the encoder pipeline."""
-    # We cannot zero num_bands (downstream graph_builder hard-codes 5),
-    # so instead we keep the encoder but feed it zeros at runtime via a
-    # CallbackTransform set on the dataset. Simpler: drop band edges.
-    model.graph.edge_pathways = [(0,)] * model.graph.num_layers
-    return model
-
-
 PATHWAY_3LAYER = [(2,), (0, 1), (0, 1, 2, 3)]
 
 
-def patch_config(name: str, config: ExperimentConfig) -> tuple[str, ExperimentConfig]:
+def patch_config(
+    name: str, config: ExperimentConfig,
+) -> tuple[str, ExperimentConfig]:
     name = name.upper()
     cfg = config
     cfg.train.n1_mixup = N1MixupConfig(enabled=False)
