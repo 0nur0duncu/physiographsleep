@@ -71,12 +71,16 @@ class LambdaFusion(nn.Module):
 
 
 def build_fusion(
-    fusion_cfg: FusionConfig,
+    fusion_cfg: FusionConfig | None,
     waveform_cfg: WaveformStemConfig,
     heads_cfg: HeadsConfig,
 ) -> tuple[WaveformOnlyClassifier | None, LambdaFusion | None]:
-    """Build the (transformer-only classifier, λ-fusion) pair if enabled."""
-    if not fusion_cfg.enabled:
+    """Build the (transformer-only classifier, λ-fusion) pair.
+
+    Returns (None, None) when `fusion_cfg is None` — used by the ablation
+    runner to structurally disable the auxiliary head.
+    """
+    if fusion_cfg is None:
         return None, None
     classifier = WaveformOnlyClassifier(
         embed_dim=waveform_cfg.embed_dim,

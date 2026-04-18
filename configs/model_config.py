@@ -41,8 +41,11 @@ class HeteroGraphConfig:
     Edge type ids (see data/graph_builder.py):
       0 = patch↔patch (homo)   1 = band↔band (homo)
       2 = patch↔band (hetero)  3 = summary↔all
-    `None` (default) keeps backward-compatible "all edges everywhere"
-    behaviour.
+
+    Default 3-layer scGraPhT pathway:
+        hetero-only → homo-only → all-edges-with-summary
+    Set `edge_pathways=None` to use all edge types in every layer
+    (only used by the ablation runner).
     """
 
     node_dim: int = 96
@@ -51,15 +54,15 @@ class HeteroGraphConfig:
     num_heads: int = 6
     num_layers: int = 3
     dropout: float = 0.2
-    drop_path: float = 0.1
+    # drop_path 0.1 → 0.2: stochastic depth at deeper layers (the
+    # "all-edges" pathway layer) was insufficient regularisation.
+    drop_path: float = 0.2
     num_patch_nodes: int = 6
     num_band_nodes: int = 5
     num_summary_nodes: int = 1
-    # Per-layer edge-type subsets. len(edge_pathways) must equal num_layers.
-    # Example scGraPhT-style pathway with num_layers=3:
-    #   [(2,), (0, 1), (0, 1, 2, 3)]
-    #   = hetero-only → homo-only → all-edges-with-summary
-    edge_pathways: list[tuple[int, ...]] | None = None
+    edge_pathways: list[tuple[int, ...]] | None = field(
+        default_factory=lambda: [(2,), (0, 1), (0, 1, 2, 3)]
+    )
 
 
 @dataclass
@@ -70,16 +73,17 @@ class FusionConfig:
         P_final = λ · P_transformer + (1 − λ) · P_GNN
 
     `λ` is a learnable scalar passed through sigmoid so it lives in (0, 1).
-    Disabled by default (`enabled=False`) → original single-head behaviour.
+    `init_lambda=0.3` deliberately favours the GNN at start (the auxiliary
+    transformer head is small and untrained), then λ adapts during training.
     """
 
-    enabled: bool = False
-    init_lambda: float = 0.5  # logit(0.5)=0 ⇒ unbiased start
+    init_lambda: float = 0.3
     transformer_dropout: float = 0.3
     # When True, the auxiliary transformer head receives gradients only
     # via its own logits (does NOT corrupt GNN graph embedding). This is
-    # the scGraPhT _EL_ semantics — embedding & logit fusion.
-    detach_gnn_for_lambda: bool = False
+    # the scGraPhT _EL_ semantics — embedding & logit fusion. Enable when
+    # the val loss diverges between the two branches.
+    detach_gnn_for_lambda: bool = True
 
 
 @dataclass
@@ -107,11 +111,15 @@ class HeadsConfig:
 
 @dataclass
 class ModelConfig:
-    """Full PhysioGraphSleep model configuration."""
+    """Full PhysioGraphSleep model configuration.
+
+    Set `fusion=None` to disable the auxiliary transformer head and use
+    the GNN logits directly (used by the ablation runner).
+    """
 
     waveform: WaveformStemConfig = field(default_factory=WaveformStemConfig)
     spectral: SpectralEncoderConfig = field(default_factory=SpectralEncoderConfig)
     graph: HeteroGraphConfig = field(default_factory=HeteroGraphConfig)
     decoder: SequenceDecoderConfig = field(default_factory=SequenceDecoderConfig)
     heads: HeadsConfig = field(default_factory=HeadsConfig)
-    fusion: FusionConfig = field(default_factory=FusionConfig)
+    fusion: FusionConfig | None = field(default_factory=FusionConfig)

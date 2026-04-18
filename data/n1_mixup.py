@@ -34,7 +34,7 @@ def _sample_beta(alpha: float, device: torch.device) -> torch.Tensor:
 
 def apply_n1_mixup(
     batch: dict[str, torch.Tensor],
-    cfg: N1MixupConfig,
+    cfg: N1MixupConfig | None,
     num_classes: int = 5,
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor] | None]:
     """Mix N1 samples with random other-class peers from the same batch.
@@ -42,14 +42,15 @@ def apply_n1_mixup(
     Args:
         batch: dict containing at least 'signal' (B, L, C, T),
             'spectral' (B, L, 5, 42), 'label' (B,)
-        cfg: N1MixupConfig
+        cfg: N1MixupConfig, or None to skip augmentation entirely
+            (used by the ablation runner).
         num_classes: number of stage classes (for soft-label one-hot)
 
     Returns:
         (possibly mixed) batch, and a dict with mixup info or None if
         no mixup was applied this call.
     """
-    if not cfg.enabled:
+    if cfg is None:
         return batch, None
 
     labels = batch["label"]

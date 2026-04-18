@@ -221,8 +221,8 @@ class Trainer:
             }
             mask = batch["mask"].to(self.device, non_blocking=True) if "mask" in batch else None
 
-            # N1-targeted Mixup (no-op if disabled or no N1 in batch)
-            if n1_mixup_cfg.enabled:
+            # N1-targeted Mixup (no-op if config is None or no N1 in batch)
+            if n1_mixup_cfg is not None:
                 mix_batch = {"signal": signals, "spectral": spectral, "label": targets["label"]}
                 mix_batch, mix_info = apply_n1_mixup(mix_batch, n1_mixup_cfg)
                 if mix_info is not None:

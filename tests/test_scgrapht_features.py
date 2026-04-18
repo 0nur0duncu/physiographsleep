@@ -69,7 +69,7 @@ def test_lambda_fusion_logit_combination():
 
 def test_full_model_with_fusion():
     cfg = ModelConfig()
-    cfg.fusion = FusionConfig(enabled=True, init_lambda=0.5)
+    cfg.fusion = FusionConfig(init_lambda=0.5)
     model = PhysioGraphSleep(cfg)
     signals = torch.randn(B, L, C, T)
     spectral = torch.randn(B, L, 5, 42)
@@ -94,7 +94,7 @@ def test_full_model_with_pathway_and_fusion():
     cfg.graph = HeteroGraphConfig(
         num_layers=3, edge_pathways=[(2,), (0, 1), (0, 1, 2, 3)],
     )
-    cfg.fusion = FusionConfig(enabled=True, init_lambda=0.5)
+    cfg.fusion = FusionConfig(init_lambda=0.5)
     model = PhysioGraphSleep(cfg)
     signals = torch.randn(B, L, C, T)
     spectral = torch.randn(B, L, 5, 42)
@@ -103,21 +103,39 @@ def test_full_model_with_pathway_and_fusion():
     print("✓ Full model + pathway + fusion forward OK")
 
 
-def test_n1_mixup_disabled_is_noop():
-    cfg = N1MixupConfig(enabled=False)
+def test_model_with_fusion_none_disables_branch():
+    """`fusion=None` structurally removes the auxiliary head."""
+    cfg = ModelConfig()
+    cfg.fusion = None
+    model = PhysioGraphSleep(cfg)
+    assert model.fusion is None
+    assert model.transformer_classifier is None
+    assert not model.fusion_enabled
+    signals = torch.randn(B, L, C, T)
+    spectral = torch.randn(B, L, 5, 42)
+    out = model(signals, spectral)
+    assert "stage_transformer" not in out
+    assert "lambda" not in out
+    counts = model.count_parameters()
+    assert "fusion" not in counts and "transformer_classifier" not in counts
+    print("✓ fusion=None disables branch (params={:,})".format(counts["total"]))
+
+
+def test_n1_mixup_none_is_noop():
+    """`cfg=None` short-circuits without mutating the batch."""
     batch = {
         "signal": torch.randn(8, 25, 1, 3000),
         "spectral": torch.randn(8, 25, 5, 42),
         "label": torch.tensor([0, 1, 1, 2, 3, 4, 0, 1]),
     }
-    out, info = apply_n1_mixup(batch, cfg)
+    out, info = apply_n1_mixup(batch, None)
     assert info is None
     assert torch.equal(out["signal"], batch["signal"])
-    print("✓ N1-Mixup no-op when disabled")
+    print("✓ N1-Mixup no-op when cfg is None")
 
 
 def test_n1_mixup_mixes_only_n1():
-    cfg = N1MixupConfig(enabled=True, prob=1.0, alpha=0.4)
+    cfg = N1MixupConfig(prob=1.0, alpha=0.4)
     torch.manual_seed(0)
     sig = torch.randn(8, 25, 1, 3000)
     labels = torch.tensor([0, 1, 1, 2, 3, 4, 0, 1])
@@ -143,7 +161,7 @@ def test_n1_mixup_mixes_only_n1():
 
 
 def test_n1_mixup_skips_when_no_n1():
-    cfg = N1MixupConfig(enabled=True, prob=1.0)
+    cfg = N1MixupConfig(prob=1.0)
     batch = {
         "signal": torch.randn(4, 25, 1, 3000),
         "spectral": torch.randn(4, 25, 5, 42),
@@ -190,7 +208,8 @@ if __name__ == "__main__":
     test_lambda_fusion_logit_combination()
     test_full_model_with_fusion()
     test_full_model_with_pathway_and_fusion()
-    test_n1_mixup_disabled_is_noop()
+    test_model_with_fusion_none_disables_branch()
+    test_n1_mixup_none_is_noop()
     test_n1_mixup_mixes_only_n1()
     test_n1_mixup_skips_when_no_n1()
     test_focal_loss_soft_targets()

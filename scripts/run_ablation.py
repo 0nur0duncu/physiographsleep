@@ -60,7 +60,9 @@ from physiographsleep.utils.reproducibility import get_device, set_seed
 
 
 # ----------------------------------------------------------------------
-# Config patches per ablation
+# Config patches per ablation. Disabling features structurally (set to
+# None) instead of via a runtime `enabled` flag, so each ablation
+# config is a self-contained, fully-specified pipeline definition.
 # ----------------------------------------------------------------------
 PATHWAY_3LAYER = [(2,), (0, 1), (0, 1, 2, 3)]
 
@@ -70,33 +72,32 @@ def patch_config(
 ) -> tuple[str, ExperimentConfig]:
     name = name.upper()
     cfg = config
-    cfg.train.n1_mixup = N1MixupConfig(enabled=False)
+    # All ablations start from a stripped baseline; F restores the new defaults.
+    cfg.train.n1_mixup = None
+    cfg.model.fusion = None
 
-    if name == "A":  # cnn_only — no spectral path, no hetero edges
+    if name == "A":  # cnn_only — single homo layer, no fusion, no mixup
         cfg.model.graph.num_layers = 1
         cfg.model.graph.edge_pathways = [(0,)]  # patch↔patch only
-        cfg.model.fusion = FusionConfig(enabled=False)
         cfg.train.epochs = min(cfg.train.epochs, 30)
-    elif name == "B":  # cnn_spectral — keep spectral, no pathway, no fusion
-        cfg.model.graph.edge_pathways = None
+    elif name == "B":  # cnn_spectral — 2 layers, all edges, no pathway
         cfg.model.graph.num_layers = 2
-        cfg.model.fusion = FusionConfig(enabled=False)
-    elif name == "C":  # graph_no_pathway (production baseline)
         cfg.model.graph.edge_pathways = None
-        cfg.model.fusion = FusionConfig(enabled=False)
-    elif name == "D":  # graph_pathway (scGraPhT-style sequential subgraphs)
+    elif name == "C":  # graph_no_pathway (pre-scGraPhT baseline)
+        cfg.model.graph.num_layers = 3
+        cfg.model.graph.edge_pathways = None
+    elif name == "D":  # + pathway (scGraPhT-style sequential subgraphs)
         cfg.model.graph.num_layers = 3
         cfg.model.graph.edge_pathways = PATHWAY_3LAYER
-        cfg.model.fusion = FusionConfig(enabled=False)
-    elif name == "E":  # graph_pathway + λ-fusion
+    elif name == "E":  # + λ-fusion
         cfg.model.graph.num_layers = 3
         cfg.model.graph.edge_pathways = PATHWAY_3LAYER
-        cfg.model.fusion = FusionConfig(enabled=True, init_lambda=0.5)
+        cfg.model.fusion = FusionConfig(init_lambda=0.3)
     elif name == "F":  # full: pathway + fusion + N1-Mixup + EOG (if available)
         cfg.model.graph.num_layers = 3
         cfg.model.graph.edge_pathways = PATHWAY_3LAYER
-        cfg.model.fusion = FusionConfig(enabled=True, init_lambda=0.5)
-        cfg.train.n1_mixup = N1MixupConfig(enabled=True, prob=0.3, alpha=0.4)
+        cfg.model.fusion = FusionConfig(init_lambda=0.3)
+        cfg.train.n1_mixup = N1MixupConfig(prob=0.2, alpha=0.2)
         if hasattr(cfg.data, "use_eog"):
             cfg.data.use_eog = True
             cfg.model.waveform.in_channels = cfg.data.num_input_channels
@@ -176,8 +177,8 @@ def run_one(name: str, base_args: argparse.Namespace) -> dict:
         "best_val_kappa": float(metrics.get("kappa", 0.0)),
         "per_class_f1": metrics.get("per_class_f1", []),
         "elapsed_sec": round(elapsed, 1),
-        "n1_mixup": config.train.n1_mixup.enabled,
-        "fusion": config.model.fusion.enabled,
+        "n1_mixup": config.train.n1_mixup is not None,
+        "fusion": config.model.fusion is not None,
         "edge_pathways": config.model.graph.edge_pathways,
     }
     return record

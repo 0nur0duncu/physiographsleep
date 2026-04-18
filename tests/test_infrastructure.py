@@ -41,20 +41,20 @@ def test_ablation_pathway_3layer_used_in_d_e_f():
 def test_ablation_fusion_only_in_e_and_f():
     e_cfg = ExperimentConfig()
     _, e_patched = patch_config("E", e_cfg)
-    assert e_patched.model.fusion.enabled
+    assert e_patched.model.fusion is not None
 
     f_cfg = ExperimentConfig()
     _, f_patched = patch_config("F", f_cfg)
-    assert f_patched.model.fusion.enabled
-    assert f_patched.train.n1_mixup.enabled
+    assert f_patched.model.fusion is not None
+    assert f_patched.train.n1_mixup is not None
 
 
 def test_ablation_a_b_c_have_fusion_disabled():
     for name in ["A", "B", "C"]:
         cfg = ExperimentConfig()
         _, patched = patch_config(name, cfg)
-        assert not patched.model.fusion.enabled
-        assert not patched.train.n1_mixup.enabled
+        assert patched.model.fusion is None
+        assert patched.train.n1_mixup is None
 
 
 # ---------------------------------------------------------------------------
