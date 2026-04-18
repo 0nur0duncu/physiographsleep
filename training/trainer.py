@@ -31,6 +31,7 @@ from ..utils.io_utils import load_checkpoint
 
 logger = logging.getLogger("physiographsleep.trainer")
 logger.propagate = False  # avoid duplicate logs in jupyter/colab
+logger.propagate = False  # avoid duplicate logs in jupyter/colab
 
 
 class Trainer:
@@ -68,6 +69,14 @@ class Trainer:
         self.scaler = GradScaler("cuda", enabled=device.type == "cuda")
         self.amp_enabled = device.type == "cuda"
         self.callback = callback
+        # Perf: pick fastest cuDNN kernels for our fixed input shape
+        if device.type == "cuda":
+            torch.backends.cudnn.benchmark = True
+        # bf16 on Ada/Hopper/Blackwell skips GradScaler entirely
+        self.amp_dtype = torch.bfloat16 if (
+            device.type == "cuda" and torch.cuda.is_bf16_supported()
+        ) else torch.float16
+        self.use_scaler = self.amp_enabled and self.amp_dtype == torch.float16
         # Perf: pick fastest cuDNN kernels for our fixed input shape
         if device.type == "cuda":
             torch.backends.cudnn.benchmark = True

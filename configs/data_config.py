@@ -46,6 +46,11 @@ class DataConfig:
     bandpass_low: float = 0.3
     bandpass_high: float = 35.0
 
+    # Wake trimming (literature standard: DeepSleepNet/TinySleepNet/AttnSleep/SleepTransformer)
+    # Keep only N minutes of W before first sleep epoch and after last sleep epoch.
+    # Set to 0 to disable. Standard value = 30 minutes.
+    wake_trim_minutes: int = 30
+
     # Augmentation
     use_augmentation: bool = True
     gaussian_noise_std: float = 0.01

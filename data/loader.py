@@ -53,7 +53,10 @@ def load_sleep_edf(config: DataConfig) -> dict[str, dict[str, np.ndarray]]:
     cache_dir = Path(config.cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    cache_file = cache_dir / f"sleepedf20_ch{config.channel.replace(' ', '_')}.npz"
+    cache_file = cache_dir / (
+        f"sleepedf20_ch{config.channel.replace(' ', '_')}"
+        f"_wt{config.wake_trim_minutes}.npz"
+    )
     if cache_file.exists():
         return _load_from_cache(cache_file)
 
@@ -191,6 +194,17 @@ def _load_single_recording(
         data = mne_epochs.get_data()  # (N, C, T)
         labels = mne_epochs.events[:, -1]
 
+        # Wake-trim (literature standard: keep ±30 min of W around sleep period)
+        if config.wake_trim_minutes > 0:
+            data, labels = _trim_wake(
+                data, labels,
+                wake_label=ANNOTATION_MAP["Sleep stage W"],
+                trim_minutes=config.wake_trim_minutes,
+                epoch_duration=config.epoch_duration,
+            )
+            if data is None or len(labels) == 0:
+                return None, None
+
         # Normalize per epoch
         mean = data.mean(axis=-1, keepdims=True)
         std = data.std(axis=-1, keepdims=True) + 1e-8
@@ -201,6 +215,35 @@ def _load_single_recording(
     except Exception as e:
         print(f"Warning: Failed to load {psg_path.name}: {e}")
         return None, None
+
+
+def _trim_wake(
+    data: np.ndarray,
+    labels: np.ndarray,
+    wake_label: int,
+    trim_minutes: int,
+    epoch_duration: int,
+) -> tuple[np.ndarray | None, np.ndarray]:
+    """Keep only `trim_minutes` of W before first and after last sleep epoch.
+
+    This is the canonical Sleep-EDF preprocessing used by DeepSleepNet,
+    TinySleepNet, AttnSleep, SleepTransformer, XSleepNet, etc. It removes
+    long awake periods at the beginning/end of recordings, which would
+    otherwise dominate (~70% W -> ~30% W) and inflate accuracy while
+    suppressing macro-F1.
+    """
+    sleep_mask = labels != wake_label
+    if not sleep_mask.any():
+        return None, np.array([], dtype=labels.dtype)
+
+    sleep_idx = np.where(sleep_mask)[0]
+    first_sleep, last_sleep = sleep_idx[0], sleep_idx[-1]
+
+    # epochs_per_minute = 60 / epoch_duration
+    keep_pad = (trim_minutes * 60) // epoch_duration
+    start = max(0, first_sleep - keep_pad)
+    end = min(len(labels), last_sleep + keep_pad + 1)
+    return data[start:end], labels[start:end]
 
 
 def _save_to_cache(path: Path, data: dict) -> None:
