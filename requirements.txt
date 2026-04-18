@@ -3,7 +3,6 @@ numpy
 scipy
 scikit-learn
 mne
-hmmlearn
 matplotlib
 seaborn
 boto3

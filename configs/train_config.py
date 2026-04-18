@@ -52,9 +52,12 @@ class AdaptiveLossConfig:
 class CurriculumConfig:
     """3-stage curriculum training settings.
 
-    NOTE: Stage B is OPTIONAL. Empirically Stage A jointly trains encoder +
-    decoder + heads, and a subsequent encoder-frozen Stage B yielded no F1_N1
-    improvement (only train loss decreased). Default OFF.
+    NOTE: Stage B and Stage C are OPTIONAL. Empirically:
+      - Stage B (encoder frozen, decoder fine-tune) yielded no F1_N1 gain.
+      - Stage C (end-to-end + adaptive loss) regressed val MF1 in earlier
+        runs because Stage A already trains decoder jointly. Enable only
+        when you want to experiment with the SeriesSleepNet-style adaptive
+        rebalancing.
     """
 
     # Stage A: joint encoder + decoder pretrain (with N1 boost)
@@ -66,7 +69,8 @@ class CurriculumConfig:
     stage_b_epochs: int = 15
     stage_b_lr: float = 1e-4
 
-    # Stage C: end-to-end fine-tune with adaptive loss
+    # Stage C (optional): end-to-end fine-tune with adaptive loss
+    enable_stage_c: bool = False
     stage_c_epochs: int = 20
     stage_c_lr: float = 5e-5
 

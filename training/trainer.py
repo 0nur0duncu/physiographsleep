@@ -109,34 +109,52 @@ class Trainer:
     def train(self, start_stage: str = "A") -> dict[str, float]:
         """Run curriculum training from a given stage.
 
-        Stage B is optional and disabled by default (controlled by
-        TrainConfig.curriculum.enable_stage_b). Empirically Stage A trains
-        encoder + decoder + heads jointly already, and re-training only the
-        sequence decoder with the encoder frozen yielded no F1_N1 gain.
+        Stages B and C are optional and OFF by default. The final loaded
+        model is the best across all enabled stages (by val macro-F1).
         """
         stages = ["A", "B", "C"]
         start_idx = stages.index(start_stage.upper())
         enable_b = getattr(self.config.curriculum, "enable_stage_b", False)
+        enable_c = getattr(self.config.curriculum, "enable_stage_c", False)
+
+        ran_stages: list[str] = []
 
         if start_idx <= 0:
             logger.info("=== Stage A: Joint encoder+decoder pretraining ===")
             self._run_stage_a()
+            ran_stages.append("A")
 
         if start_idx <= 1 and enable_b:
             self._load_stage_checkpoint("A")
-            logger.info("=== Stage B: Sequence decoder fine-tune (encoder frozen) ===")
+            logger.info("=== Stage B: Decoder fine-tune (encoder frozen) ===")
             self._run_stage_b()
+            ran_stages.append("B")
 
-        if start_idx <= 2:
-            # Load best of (B if enabled and present, else A)
+        if start_idx <= 2 and enable_c:
             loaded_b = enable_b and self._load_stage_checkpoint("B")
             if not loaded_b:
                 self._load_stage_checkpoint("A")
-            logger.info("=== Stage C: End-to-end fine-tuning ===")
+            logger.info("=== Stage C: End-to-end fine-tune (adaptive loss) ===")
             self._run_stage_c()
+            ran_stages.append("C")
 
-        # Final: load best Stage C
-        self._load_stage_checkpoint("C")
+        # Pick the best stage by reading saved checkpoints (source of truth).
+        best_stage, best_mf1 = None, -1.0
+        for s in ran_stages:
+            ckpt_path = self.config.checkpoint_dir + f"/stage-{s.lower()}.pt"
+            try:
+                from physiographsleep.utils.io_utils import load_checkpoint
+                ck = load_checkpoint(ckpt_path, self.device)
+                m = float(ck.get("metrics", {}).get("macro_f1", 0.0))
+                logger.info(f"  Stage {s} best val MF1 = {m:.4f}")
+                if m > best_mf1:
+                    best_mf1, best_stage = m, s
+            except FileNotFoundError:
+                continue
+
+        if best_stage is not None:
+            logger.info(f"=== Best across stages: {best_stage} (MF1={best_mf1:.4f}) ===")
+            self._load_stage_checkpoint(best_stage)
         return self.best_metrics
 
     # ------------------------------------------------------------------
