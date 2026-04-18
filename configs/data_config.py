@@ -69,3 +69,8 @@ class DataConfig:
     @property
     def features_per_band(self) -> int:
         return self.num_patches * 7  # 7 spectral features per patch per band
+
+    @property
+    def num_input_channels(self) -> int:
+        """Number of waveform input channels: 1 (EEG only) or 2 (EEG + EOG)."""
+        return 2 if self.use_eog else 1

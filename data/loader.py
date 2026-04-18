@@ -53,8 +53,11 @@ def load_sleep_edf(config: DataConfig) -> dict[str, dict[str, np.ndarray]]:
     cache_dir = Path(config.cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    # Cache key includes channel + EOG state so EEG-only and EEG+EOG caches
+    # never collide. Switching `use_eog` automatically forces re-extraction.
+    eog_tag = "_eog" if config.use_eog else ""
     cache_file = cache_dir / (
-        f"sleepedf20_ch{config.channel.replace(' ', '_')}"
+        f"sleepedf20_ch{config.channel.replace(' ', '_')}{eog_tag}"
         f"_wt{config.wake_trim_minutes}.npz"
     )
     if cache_file.exists():
