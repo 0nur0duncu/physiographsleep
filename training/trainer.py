@@ -51,6 +51,7 @@ class Trainer:
         data_config: Any,
         device: torch.device,
         spectral_extractor: SpectralFeatureExtractor | None = None,
+        callback=None,
     ):
         self.model = model.to(device)
         self.loss_fn = loss_fn.to(device)
@@ -65,6 +66,7 @@ class Trainer:
         self.best_metrics: dict[str, float] = {}
         self.scaler = GradScaler("cuda", enabled=device.type == "cuda")
         self.amp_enabled = device.type == "cuda"
+        self.callback = callback
 
     def _build_train_loader(self, n1_boost: float | None = None) -> DataLoader:
         """Build a training DataLoader with optional N1-boosted sampling."""
@@ -143,12 +145,15 @@ class Trainer:
         checkpoint = ModelCheckpoint(self.config.checkpoint_dir, mode="max")
 
         for epoch in range(self.config.curriculum.stage_a_epochs):
-            train_loss = self._train_one_epoch(optimizer, loader, stage="A")
+            train_loss, tr_preds, tr_labels = self._train_one_epoch(
+                optimizer, loader, stage="A",
+            )
+            train_metrics = self._train_metrics(tr_labels, tr_preds)
             val_metrics = self.evaluator.evaluate(
                 self.model, self.val_loader, self.spectral_extractor,
             )
 
-            self._log_epoch("A", epoch, train_loss, val_metrics)
+            self._log_epoch("A", epoch, train_loss, val_metrics, train_metrics)
             scheduler.step()
 
             self._save_if_best(val_metrics, checkpoint, "A")
@@ -173,12 +178,15 @@ class Trainer:
         checkpoint = ModelCheckpoint(self.config.checkpoint_dir, mode="max")
 
         for epoch in range(self.config.curriculum.stage_b_epochs):
-            train_loss = self._train_one_epoch(optimizer, loader, stage="B")
+            train_loss, tr_preds, tr_labels = self._train_one_epoch(
+                optimizer, loader, stage="B",
+            )
+            train_metrics = self._train_metrics(tr_labels, tr_preds)
             val_metrics = self.evaluator.evaluate(
                 self.model, self.val_loader, self.spectral_extractor,
             )
 
-            self._log_epoch("B", epoch, train_loss, val_metrics)
+            self._log_epoch("B", epoch, train_loss, val_metrics, train_metrics)
             scheduler.step()
 
             self._save_if_best(val_metrics, checkpoint, "B")
@@ -201,13 +209,13 @@ class Trainer:
 
         for epoch in range(self.config.curriculum.stage_c_epochs):
             use_adaptive = epoch >= warmup
-            result = self._train_one_epoch(
-                optimizer, loader, stage="C", collect_preds=use_adaptive,
+            train_loss, tr_preds, tr_labels = self._train_one_epoch(
+                optimizer, loader, stage="C",
             )
+            train_metrics = self._train_metrics(tr_labels, tr_preds)
 
-            if isinstance(result, tuple):
-                train_loss, train_preds, train_targets = result
-                class_f1 = self._compute_per_class_f1(train_targets, train_preds)
+            if use_adaptive:
+                class_f1 = self._compute_per_class_f1(tr_labels, tr_preds)
                 self.loss_fn.update_adaptive_weights(
                     class_f1,
                     K=self.config.adaptive_loss.K,
@@ -217,14 +225,12 @@ class Trainer:
                     f"  Adaptive F1: {[f'{f:.3f}' for f in class_f1]} | "
                     f"Weights: {[f'{w:.2f}' for w in self.loss_fn.focal.weight.tolist()]}"
                 )
-            else:
-                train_loss = result
 
             val_metrics = self.evaluator.evaluate(
                 self.model, self.val_loader, self.spectral_extractor,
             )
 
-            self._log_epoch("C", epoch, train_loss, val_metrics)
+            self._log_epoch("C", epoch, train_loss, val_metrics, train_metrics)
             scheduler.step()
 
             self._save_if_best(val_metrics, checkpoint, "C")
@@ -240,17 +246,13 @@ class Trainer:
         optimizer: torch.optim.Optimizer,
         loader: DataLoader,
         stage: str = "",
-        collect_preds: bool = False,
-    ) -> float | tuple[float, np.ndarray, np.ndarray]:
-        """Train for one epoch.
-
-        Returns mean loss, or (loss, preds, labels) when collect_preds=True.
-        """
+    ) -> tuple[float, np.ndarray, np.ndarray]:
+        """Train for one epoch. Returns (mean_loss, preds, labels)."""
         self.model.train()
         total_loss = 0.0
         num_batches = 0
-        all_preds: list[np.ndarray] | None = [] if collect_preds else None
-        all_labels: list[np.ndarray] | None = [] if collect_preds else None
+        all_preds: list[np.ndarray] = []
+        all_labels: list[np.ndarray] = []
 
         pbar = tqdm(loader, desc=f"Train {stage}", leave=False)
         for batch in pbar:
@@ -290,15 +292,26 @@ class Trainer:
             num_batches += 1
             pbar.set_postfix(loss=f"{total_loss/num_batches:.4f}")
 
-            if collect_preds:
-                with torch.no_grad():
-                    all_preds.append(predictions["stage"].argmax(dim=1).cpu().numpy())
-                    all_labels.append(targets["label"].cpu().numpy())
+            with torch.no_grad():
+                all_preds.append(predictions["stage"].argmax(dim=1).cpu().numpy())
+                all_labels.append(targets["label"].cpu().numpy())
 
         mean_loss = total_loss / max(num_batches, 1)
-        if collect_preds:
-            return mean_loss, np.concatenate(all_preds), np.concatenate(all_labels)
-        return mean_loss
+        return mean_loss, np.concatenate(all_preds), np.concatenate(all_labels)
+
+    def _train_metrics(
+        self, labels: np.ndarray, preds: np.ndarray,
+    ) -> dict[str, float]:
+        """Compute lightweight train metrics for logging."""
+        labels = labels.reshape(-1)
+        preds = preds.reshape(-1)
+        acc = float((labels == preds).mean()) if labels.size else 0.0
+        f1 = self._compute_per_class_f1(labels, preds)
+        return {
+            "accuracy": acc,
+            "macro_f1": float(f1.mean()),
+            "per_class_f1": f1.tolist(),
+        }
 
     @staticmethod
     def _compute_per_class_f1(
@@ -342,14 +355,30 @@ class Trainer:
 
     def _log_epoch(
         self, stage: str, epoch: int, loss: float, metrics: dict[str, float],
+        train_metrics: dict[str, float] | None = None,
     ) -> None:
+        train_extra = ""
+        if train_metrics is not None:
+            train_extra = (
+                f"TrainACC={train_metrics.get('accuracy', 0):.4f} | "
+                f"TrainMF1={train_metrics.get('macro_f1', 0):.4f} | "
+            )
         logger.info(
             f"[{stage}] Epoch {epoch:02d} | "
             f"Loss={loss:.4f} | "
-            f"ACC={metrics['accuracy']:.4f} | "
-            f"MF1={metrics['macro_f1']:.4f} | "
-            f"κ={metrics['kappa']:.4f}"
+            f"{train_extra}"
+            f"ValACC={metrics['accuracy']:.4f} | "
+            f"ValMF1={metrics['macro_f1']:.4f} | "
+            f"\u03ba={metrics['kappa']:.4f}"
         )
+        if self.callback is not None:
+            try:
+                self.callback(
+                    stage=stage, epoch=epoch, train_loss=loss,
+                    train_metrics=train_metrics or {}, val_metrics=metrics,
+                )
+            except Exception as exc:  # pragma: no cover
+                logger.warning(f"Callback failed: {exc}")
 
     @staticmethod
     def _freeze_module(module: nn.Module) -> None:
