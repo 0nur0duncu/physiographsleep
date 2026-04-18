@@ -92,13 +92,11 @@ class SleepEDFDataset(Dataset):
         L = self.seq_len
         C, T = self.epochs.shape[1], self.epochs.shape[2]
         seq_data = np.zeros((L, C, T), dtype=self.epochs.dtype)
-        seq_labels = np.zeros(L, dtype=np.int64)
         mask = np.zeros(L, dtype=np.float32)
 
         # Vectorized copy of valid epochs
         valid_positions = np.where(valid_mask)[0]
         seq_data[valid_positions] = self.epochs[valid_indices]
-        seq_labels[valid_positions] = self.labels[valid_indices]
         mask[valid_positions] = 1.0
 
         # Apply augmentation to entire sequence at once
@@ -129,7 +127,6 @@ class SleepEDFDataset(Dataset):
         result = {
             "signal": torch.from_numpy(seq_data).float(),         # (L, C, T)
             "label": torch.tensor(center_label, dtype=torch.long),
-            "seq_labels": torch.from_numpy(seq_labels).long(),    # (L,)
             "mask": torch.from_numpy(mask).float(),               # (L,)
             "boundary": torch.tensor(is_boundary, dtype=torch.float),
             "prev_label": torch.tensor(prev_label, dtype=torch.long),

@@ -23,7 +23,6 @@ class DataConfig:
     # Split
     train_subjects: int = 14
     val_subjects: int = 3
-    test_subjects: int = 3
     seed: int = 42
 
     # Sequence

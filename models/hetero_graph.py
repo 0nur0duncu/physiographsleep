@@ -94,8 +94,10 @@ class HeteroGraphEncoder(nn.Module):
             patch_tokens, band_tokens,
         )
 
-        # Replace zero summary tokens with learned parameter (vectorized)
+        # Indices of summary nodes within the batched graph (one per epoch)
         summary_indices = torch.arange(B, device=device) * NUM_NODES + SUMMARY_OFFSET
+
+        # Replace zero summary tokens with learned parameter (vectorized)
         x[summary_indices] = self.summary_token.expand(B, -1)
 
         num_nodes = x.shape[0]
@@ -105,7 +107,6 @@ class HeteroGraphEncoder(nn.Module):
             x = block(x, edge_index, edge_type, num_nodes)
 
         # Readout: summary token + attentive pool
-        summary_indices = torch.arange(B, device=device) * NUM_NODES + SUMMARY_OFFSET
         summary_out = x[summary_indices]  # (B, D)
 
         pool_out = self.readout(x, batch_id, B)  # (B, D)

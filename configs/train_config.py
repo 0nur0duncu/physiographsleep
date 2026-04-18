@@ -72,13 +72,8 @@ class TrainConfig:
     adaptive_loss: AdaptiveLossConfig = field(default_factory=AdaptiveLossConfig)
 
     # General
-    max_epochs: int = 80  # sum of curriculum stages (30+25+25)
     patience: int = 15
-    val_interval: int = 1
 
     # Logging
-    use_wandb: bool = False
-    project_name: str = "physiographsleep"
-    experiment_name: str = "default"
     log_dir: str = "logs"
     checkpoint_dir: str = "checkpoints"

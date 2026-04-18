@@ -80,38 +80,6 @@ def build_edge_index() -> tuple[torch.Tensor, torch.Tensor]:
 STATIC_EDGE_INDEX, STATIC_EDGE_TYPE = build_edge_index()
 
 
-def get_epoch_graph(
-    patch_tokens: torch.Tensor,
-    band_tokens: torch.Tensor,
-    device: torch.device | None = None,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Assemble node features and graph topology for one epoch.
-
-    Args:
-        patch_tokens: (6, D) patch node features
-        band_tokens: (5, D) band node features
-        device: target device
-
-    Returns:
-        x: (12, D) node feature matrix
-        edge_index: (2, E) edge indices
-        edge_type: (E,) edge type labels
-    """
-    d = patch_tokens.shape[-1]
-    summary = torch.zeros(1, d, device=patch_tokens.device)
-
-    x = torch.cat([patch_tokens, band_tokens, summary], dim=0)  # (12, D)
-
-    edge_index = STATIC_EDGE_INDEX
-    edge_type = STATIC_EDGE_TYPE
-
-    if device is not None:
-        edge_index = edge_index.to(device)
-        edge_type = edge_type.to(device)
-
-    return x, edge_index, edge_type
-
-
 def batch_epoch_graphs(
     patch_tokens_batch: torch.Tensor,
     band_tokens_batch: torch.Tensor,
