@@ -109,11 +109,14 @@ class SleepEDFDataset(Dataset):
 
         center_label = self.labels[idx]
 
-        # Boundary label: does center epoch differ from neighbors?
+        # Boundary label: does center epoch differ from either neighbor?
+        # Use independent `if` checks so first/last epochs are evaluated
+        # symmetrically (asymmetric `elif` previously missed boundaries at
+        # idx=0).
         is_boundary = 0
         if idx > 0 and self.labels[idx] != self.labels[idx - 1]:
             is_boundary = 1
-        elif idx < self.num_epochs - 1 and self.labels[idx] != self.labels[idx + 1]:
+        if idx < self.num_epochs - 1 and self.labels[idx] != self.labels[idx + 1]:
             is_boundary = 1
 
         # Previous / next stage labels

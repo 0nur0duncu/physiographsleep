@@ -63,6 +63,46 @@ def test_sequence_decoder():
     print(f"✓ SequenceTransitionDecoder: {out.shape}")
 
 
+def test_sequence_decoder_mask_zeroes_padding():
+    """Padded positions must be zeroed at decoder output (mask propagation)."""
+    cfg = SequenceDecoderConfig()
+    model = SequenceTransitionDecoder(cfg)
+    model.eval()
+    x = torch.randn(B, L, 128)
+    mask = torch.ones(B, L)
+    mask[1, :5] = 0.0   # left padding on sample 1
+    mask[1, -3:] = 0.0  # right padding on sample 1
+    with torch.no_grad():
+        out = model(x, mask)
+    padded = out[mask == 0]
+    valid = out[mask == 1]
+    assert padded.abs().max().item() < 1e-6, \
+        f"padded outputs not zeroed: max|.|={padded.abs().max().item():.3e}"
+    assert valid.abs().max().item() > 1e-3, \
+        "valid outputs collapsed to zero"
+    print("✓ SequenceTransitionDecoder mask zeroes padded positions")
+
+
+def test_dataset_boundary_symmetry():
+    """First/last epochs with stage transition must be labeled boundary=1."""
+    import numpy as np
+    from physiographsleep.configs.data_config import DataConfig
+    from physiographsleep.data.dataset import SleepEDFDataset
+
+    cfg = DataConfig()
+    cfg.seq_len = 5
+    # labels: W, W, N1, N1, N2  -> boundary at idx 1 (W->N1 next), 2 (W->N1 prev),
+    #                              and idx 3 (N1->N2 next), idx 4 (N1->N2 prev)
+    labels = np.array([0, 0, 1, 1, 2], dtype=np.int64)
+    epochs = np.zeros((len(labels), 1, cfg.epoch_samples), dtype=np.float32)
+    ds = SleepEDFDataset(epochs, labels, config=cfg)
+    boundaries = [int(ds[i]["boundary"].item()) for i in range(len(labels))]
+    assert boundaries[1] == 1, f"idx=1 should be boundary, got {boundaries}"
+    assert boundaries[3] == 1, f"idx=3 should be boundary, got {boundaries}"
+    assert boundaries[0] == 0, f"idx=0 W->W should NOT be boundary, got {boundaries}"
+    print(f"✓ Dataset boundary symmetric labels: {boundaries}")
+
+
 def test_heads():
     cfg = HeadsConfig()
     model = MultiTaskHeads(cfg)
@@ -101,6 +141,8 @@ if __name__ == "__main__":
     test_spectral_encoder()
     test_hetero_graph()
     test_sequence_decoder()
+    test_sequence_decoder_mask_zeroes_padding()
+    test_dataset_boundary_symmetry()
     test_heads()
     test_full_model()
     print("\n" + "=" * 60)

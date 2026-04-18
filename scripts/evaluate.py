@@ -76,8 +76,9 @@ def main() -> None:
         with torch.no_grad():
             for batch in test_loader:
                 signals = batch["signal"].to(device)
+                mask = batch["mask"].to(device) if "mask" in batch else None
                 spec = evaluator._extract_spectral_batch(signals, spectral)
-                outputs = model(signals, spec)
+                outputs = model(signals, spec, mask)
                 preds = outputs["stage"].argmax(dim=-1)
                 all_preds.append(preds.cpu().numpy())
                 all_labels.append(batch["label"].numpy())

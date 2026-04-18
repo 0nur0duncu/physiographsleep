@@ -78,21 +78,37 @@ class MultiTaskLoss(nn.Module):
         K: float = 10.0,
         gamma: float = 3.0,
         eps: float = 1e-4,
+        min_weight: float = 0.5,
+        max_weight: float = 5.0,
+        ema_momentum: float = 0.7,
     ) -> None:
         """Update focal loss class weights based on per-class F1 scores.
 
         Adaptive weighting inspired by SeriesSleepNet (Lee et al., 2023):
-        W_i = K / (CF_i + eps)^gamma
+            W_i = K / (CF_i + eps)^gamma
+
+        Stabilized with:
+          - per-class min/max clipping (defaults 0.5 .. 5.0) to prevent the
+            K / F1^gamma blow-up when a class F1 is near zero,
+          - re-normalization to sum=num_classes after clipping,
+          - EMA smoothing against current weights to damp epoch-to-epoch
+            fluctuation (momentum=0.7 keeps 70% of previous weights).
         """
         f1_clipped = np.clip(class_f1, eps, None)
         adaptive = K / np.power(f1_clipped, gamma)
         adaptive = adaptive / adaptive.sum() * len(adaptive)
-        weight_tensor = torch.tensor(adaptive, dtype=torch.float32)
+        adaptive = np.clip(adaptive, min_weight, max_weight)
+        adaptive = adaptive / adaptive.sum() * len(adaptive)
+        new_w = torch.tensor(adaptive, dtype=torch.float32)
+
         if self.focal.weight is not None:
-            self.focal.weight.copy_(weight_tensor.to(self.focal.weight.device))
+            prev = self.focal.weight.detach().to(new_w.device)
+            blended = ema_momentum * prev + (1.0 - ema_momentum) * new_w
+            blended = blended / blended.sum() * len(blended)
+            self.focal.weight.copy_(blended.to(self.focal.weight.device))
         else:
             device = next(self.parameters()).device
-            self.focal.register_buffer("weight", weight_tensor.to(device))
+            self.focal.register_buffer("weight", new_w.to(device))
 
     def forward(
         self,

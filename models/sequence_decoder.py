@@ -142,17 +142,33 @@ class SequenceTransitionDecoder(nn.Module):
         Returns:
             sequence_features: (B, L, 160)
         """
+        # Sequence padding mask: (B, L, 1), 1.0 for valid, 0.0 for padded.
+        # Applied at every layer to prevent zero-padded edge positions from
+        # corrupting BiGRU hidden state and causing encoder representation
+        # collapse during Stage A pretraining.
+        if mask is not None:
+            m = mask.unsqueeze(-1).to(epoch_embeddings.dtype)
+            epoch_embeddings = epoch_embeddings * m
+
         # BiGRU
         x, _ = self.gru(epoch_embeddings)  # (B, L, 160)
         x = self.gru_dropout(x)
+        if mask is not None:
+            x = x * m
 
         # Temporal convolution
         x = self.temporal_conv(x)  # (B, L, 160)
+        if mask is not None:
+            x = x * m
 
         # Transition memory cross-attention
         x = self.transition_memory(x)  # (B, L, 160)
+        if mask is not None:
+            x = x * m
 
         # Project
         x = self.projection(x)  # (B, L, output_dim)
+        if mask is not None:
+            x = x * m
 
         return x

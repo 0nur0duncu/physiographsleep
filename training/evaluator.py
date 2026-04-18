@@ -41,6 +41,7 @@ class Evaluator:
         for batch in dataloader:
             signals = batch["signal"].to(self.device)       # (B, L, C, T)
             labels = batch["label"].to(self.device)          # (B,)
+            mask = batch["mask"].to(self.device) if "mask" in batch else None
 
             # Use pre-computed spectral features if available
             if "spectral" in batch:
@@ -49,7 +50,7 @@ class Evaluator:
                 B, L, C, T = signals.shape
                 spectral = self._extract_spectral_batch(signals, spectral_extractor)
 
-            outputs = model(signals, spectral)
+            outputs = model(signals, spectral, mask)
             logits = outputs["stage"]              # (B, 5)
             preds = logits.argmax(dim=-1)          # (B,)
 

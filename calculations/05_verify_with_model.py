@@ -271,17 +271,21 @@ scenario_f1s = [
     ("edge case", np.array([0.95, 0.10, 0.85, 0.70, 0.80])),
 ]
 
+MIN_W, MAX_W = 0.5, 5.0
 for name, f1 in scenario_f1s:
     f1_clipped = np.clip(f1, eps, None)
     raw = K / np.power(f1_clipped, gamma)
     normalized = raw / raw.sum() * len(raw)
-    
+    # Apply the same clip + renormalize policy as MultiTaskLoss
+    clipped = np.clip(normalized, MIN_W, MAX_W)
+    normalized = clipped / clipped.sum() * len(clipped)
+
     print(f"\n   {name}:")
     print(f"     F1:      {[f'{v:.3f}' for v in f1]}")
     print(f"     Weights: {[f'{v:.3f}' for v in normalized]}")
     print(f"     sum={normalized.sum():.1f} (beklenen: 5.0)")
     print(f"     max/min ratio: {normalized.max()/normalized.min():.1f}×")
-    
+
     assert abs(normalized.sum() - 5.0) < 0.01, "Normalizasyon hatası!"
     assert normalized.max() / normalized.min() < 20, f"Aşırı dengesiz: {normalized.max()/normalized.min():.1f}×"
 
