@@ -16,7 +16,15 @@ from ..configs.train_config import LossConfig
 
 
 class FocalLoss(nn.Module):
-    """Focal loss with optional class weights and label smoothing."""
+    """Focal loss with optional class weights and label smoothing.
+
+    Supports both hard integer targets and soft probability targets
+    (e.g. produced by Mixup). For soft targets we use the standard
+    cross-entropy form −Σ y_soft · log_softmax(logits) and reweight
+    sample-wise by (1 − p_t)^γ where p_t is the model's confidence on
+    the soft-label argmax — a faithful focal extension that keeps the
+    same family of class weights.
+    """
 
     def __init__(
         self,
@@ -30,14 +38,34 @@ class FocalLoss(nn.Module):
         self.register_buffer("weight", weight)
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-        ce = F.cross_entropy(
-            logits, targets,
-            weight=self.weight,
-            reduction="none",
-            label_smoothing=self.label_smoothing,
-        )
-        pt = torch.exp(-ce)
-        focal = ((1 - pt) ** self.gamma) * ce
+        # Hard integer targets → standard focal CE
+        if targets.dim() == 1 or targets.dtype in (torch.int64, torch.int32, torch.long):
+            ce = F.cross_entropy(
+                logits, targets,
+                weight=self.weight,
+                reduction="none",
+                label_smoothing=self.label_smoothing,
+            )
+            pt = torch.exp(-ce)
+            focal = ((1 - pt) ** self.gamma) * ce
+            return focal.mean()
+
+        # Soft targets (B, K) — Mixup path
+        log_probs = F.log_softmax(logits, dim=-1)
+        if self.label_smoothing > 0:
+            n_classes = targets.shape[-1]
+            targets = (
+                targets * (1.0 - self.label_smoothing)
+                + self.label_smoothing / n_classes
+            )
+        if self.weight is not None:
+            log_probs = log_probs * self.weight.unsqueeze(0)
+        per_sample_ce = -(targets * log_probs).sum(dim=-1)  # (B,)
+        # Focal modulation on the *target-weighted* confidence
+        with torch.no_grad():
+            probs = log_probs.exp()
+            pt = (targets * probs).sum(dim=-1).clamp(min=1e-6, max=1.0)
+        focal = ((1 - pt) ** self.gamma) * per_sample_ce
         return focal.mean()
 
 
@@ -65,9 +93,15 @@ class MultiTaskLoss(nn.Module):
         predictions: dict[str, torch.Tensor],
         targets: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
-        """Compute weighted multi-task loss for the center epoch."""
+        """Compute weighted multi-task loss for the center epoch.
+
+        If `targets["label_soft"]` is present (Mixup path), the stage
+        focal loss consumes the soft target distribution; auxiliary
+        heads still use the original hard center labels.
+        """
         losses = {}
-        losses["stage"] = self.focal(predictions["stage"], targets["label"])
+        stage_target = targets.get("label_soft", targets["label"])
+        losses["stage"] = self.focal(predictions["stage"], stage_target)
         losses["boundary"] = self.bce(predictions["boundary"], targets["boundary"])
         losses["prev"] = self.ce(predictions["prev"], targets["prev_label"])
         losses["next"] = self.ce(predictions["next"], targets["next_label"])

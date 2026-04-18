@@ -41,6 +41,7 @@ class GraphTransformerBlock(nn.Module):
         edge_index: torch.Tensor,
         edge_type: torch.Tensor,
         num_nodes: int,
+        edge_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -48,12 +49,16 @@ class GraphTransformerBlock(nn.Module):
             edge_index: (2, E)
             edge_type: (E,)
             num_nodes: N
+            edge_mask: optional (E,) bool — restrict this layer to a
+                pathway-specific edge subset (scGraPhT §III-D).
 
         Returns:
             (N, D) updated features
         """
         # Multi-head attention + DropPath + residual
-        x = x + self.drop_path(self.attention(self.norm1(x), edge_index, edge_type, num_nodes))
+        x = x + self.drop_path(self.attention(
+            self.norm1(x), edge_index, edge_type, num_nodes, edge_mask=edge_mask,
+        ))
         # FFN + DropPath + residual
         x = x + self.drop_path(self.ffn(self.norm2(x)))
         return x

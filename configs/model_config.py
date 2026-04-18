@@ -31,7 +31,19 @@ class SpectralEncoderConfig:
 
 @dataclass
 class HeteroGraphConfig:
-    """Heterogeneous Epoch Graph Encoder."""
+    """Heterogeneous Epoch Graph Encoder.
+
+    `edge_pathways` (scGraPhT-inspired, IEEE TSIPN 2025 §III-D) restricts
+    each layer to a subset of edge types so the network composes a
+    pathway of homogeneous + heterogeneous subgraph layers instead of
+    fully-fused multi-relational message passing in every layer.
+
+    Edge type ids (see data/graph_builder.py):
+      0 = patch↔patch (homo)   1 = band↔band (homo)
+      2 = patch↔band (hetero)  3 = summary↔all
+    `None` (default) keeps backward-compatible "all edges everywhere"
+    behaviour.
+    """
 
     node_dim: int = 96
     hidden_dim: int = 96
@@ -43,6 +55,31 @@ class HeteroGraphConfig:
     num_patch_nodes: int = 6
     num_band_nodes: int = 5
     num_summary_nodes: int = 1
+    # Per-layer edge-type subsets. len(edge_pathways) must equal num_layers.
+    # Example scGraPhT-style pathway with num_layers=3:
+    #   [(2,), (0, 1), (0, 1, 2, 3)]
+    #   = hetero-only → homo-only → all-edges-with-summary
+    edge_pathways: list[tuple[int, ...]] | None = None
+
+
+@dataclass
+class FusionConfig:
+    """λ-interpolation fusion of transformer (waveform-only) and GNN heads.
+
+    scGraPhT (IEEE TSIPN 2025) Eq. (1):
+        P_final = λ · P_transformer + (1 − λ) · P_GNN
+
+    `λ` is a learnable scalar passed through sigmoid so it lives in (0, 1).
+    Disabled by default (`enabled=False`) → original single-head behaviour.
+    """
+
+    enabled: bool = False
+    init_lambda: float = 0.5  # logit(0.5)=0 ⇒ unbiased start
+    transformer_dropout: float = 0.3
+    # When True, the auxiliary transformer head receives gradients only
+    # via its own logits (does NOT corrupt GNN graph embedding). This is
+    # the scGraPhT _EL_ semantics — embedding & logit fusion.
+    detach_gnn_for_lambda: bool = False
 
 
 @dataclass
@@ -77,3 +114,4 @@ class ModelConfig:
     graph: HeteroGraphConfig = field(default_factory=HeteroGraphConfig)
     decoder: SequenceDecoderConfig = field(default_factory=SequenceDecoderConfig)
     heads: HeadsConfig = field(default_factory=HeadsConfig)
+    fusion: FusionConfig = field(default_factory=FusionConfig)

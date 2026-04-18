@@ -18,6 +18,7 @@ from .layers import GraphTransformerBlock
 from ..data.graph_builder import (
     NUM_NODES, SUMMARY_OFFSET, PATCH_OFFSET, BAND_OFFSET,
     NUM_PATCH, NUM_BAND, batch_epoch_graphs,
+    STATIC_EDGE_TYPE,
 )
 
 
@@ -93,6 +94,32 @@ class HeteroGraphEncoder(nn.Module):
         self.register_buffer("_patch_local", patch_local, persistent=False)
         self.register_buffer("_band_local", band_local, persistent=False)
 
+        # Pathway-based edge masks (scGraPhT §III-D). One bool mask per
+        # layer over the *single-graph* edge list — the same mask is
+        # tiled across the batched graph at runtime since topology is
+        # static across epochs. None ⇒ no masking (all edges).
+        self._layer_edge_masks: list[torch.Tensor | None] = []
+        if config.edge_pathways is not None:
+            assert len(config.edge_pathways) == config.num_layers, (
+                f"edge_pathways length {len(config.edge_pathways)} must "
+                f"equal num_layers {config.num_layers}"
+            )
+            for li, allowed in enumerate(config.edge_pathways):
+                if allowed is None or len(allowed) == 0:
+                    mask = None
+                else:
+                    allowed_t = torch.tensor(list(allowed), dtype=torch.long)
+                    mask = torch.isin(STATIC_EDGE_TYPE, allowed_t)
+                self.register_buffer(
+                    f"_edge_mask_l{li}",
+                    mask if mask is not None else torch.empty(0, dtype=torch.bool),
+                    persistent=False,
+                )
+                self._layer_edge_masks.append(mask)
+        else:
+            for li in range(config.num_layers):
+                self._layer_edge_masks.append(None)
+
     def forward(
         self,
         patch_tokens: torch.Tensor,
@@ -122,9 +149,23 @@ class HeteroGraphEncoder(nn.Module):
 
         num_nodes = x.shape[0]
 
+        # Pre-tile static layer masks across the batched edge list once.
+        # STATIC mask is (E,) over a single-epoch graph; batched edge_index
+        # is laid out as B copies of the same edge list (see graph_builder
+        # `batch_epoch_graphs` — offsets are added to node ids, not edges),
+        # therefore tiling is the correct broadcast.
+        layer_masks: list[torch.Tensor | None] = []
+        for li in range(len(self.blocks)):
+            m = self._layer_edge_masks[li]
+            if m is None:
+                layer_masks.append(None)
+            else:
+                # m shape (E,) → repeat B times for the batched graph
+                layer_masks.append(m.to(device).repeat(B))
+
         # Process through transformer blocks
-        for block in self.blocks:
-            x = block(x, edge_index, edge_type, num_nodes)
+        for block, mask in zip(self.blocks, layer_masks):
+            x = block(x, edge_index, edge_type, num_nodes, edge_mask=mask)
 
         # --- Hetero-aware readout ------------------------------------------
         # Batch-offset indices for patch / band nodes

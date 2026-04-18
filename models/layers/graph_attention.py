@@ -38,6 +38,7 @@ class EdgeAwareAttention(nn.Module):
         edge_index: torch.Tensor,
         edge_type: torch.Tensor,
         num_nodes: int,
+        edge_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Args:
@@ -45,10 +46,16 @@ class EdgeAwareAttention(nn.Module):
             edge_index: (2, E) source–target edge pairs
             edge_type: (E,) edge type indices
             num_nodes: total number of nodes N
+            edge_mask: optional (E,) bool tensor — keep only True edges
+                (used by pathway-based subgraph layers, scGraPhT §III-D).
 
         Returns:
             out: (N, D) updated node features
         """
+        if edge_mask is not None:
+            edge_index = edge_index[:, edge_mask]
+            edge_type = edge_type[edge_mask]
+
         Q = self.q_proj(x)  # (N, D)
         K = self.k_proj(x)
         V = self.v_proj(x)

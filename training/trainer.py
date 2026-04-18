@@ -26,6 +26,7 @@ from tqdm import tqdm
 from ..configs.train_config import TrainConfig
 from ..data.sampler import build_weighted_sampler
 from ..data.spectral import SpectralFeatureExtractor
+from ..data.n1_mixup import apply_n1_mixup
 from ..models.losses import MultiTaskLoss
 from ..models.physiographsleep import PhysioGraphSleep
 from .callbacks import EarlyStopping, ModelCheckpoint
@@ -201,6 +202,7 @@ class Trainer:
         pbar = tqdm(loader, desc="Train", leave=False)
         gpu_preds: list[torch.Tensor] = []
         gpu_labels: list[torch.Tensor] = []
+        n1_mixup_cfg = self.config.n1_mixup
         for batch in pbar:
             signals = batch["signal"].to(self.device, non_blocking=True)
             spectral = (
@@ -218,6 +220,15 @@ class Trainer:
                 "n1_label":   batch["n1_label"].to(self.device, non_blocking=True),
             }
             mask = batch["mask"].to(self.device, non_blocking=True) if "mask" in batch else None
+
+            # N1-targeted Mixup (no-op if disabled or no N1 in batch)
+            if n1_mixup_cfg.enabled:
+                mix_batch = {"signal": signals, "spectral": spectral, "label": targets["label"]}
+                mix_batch, mix_info = apply_n1_mixup(mix_batch, n1_mixup_cfg)
+                if mix_info is not None:
+                    signals = mix_batch["signal"]
+                    spectral = mix_batch["spectral"]
+                    targets["label_soft"] = mix_info["soft_label"]
 
             with autocast("cuda", enabled=self.amp_enabled, dtype=self.amp_dtype):
                 predictions = self.model(signals, spectral, mask)

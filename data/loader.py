@@ -110,6 +110,69 @@ def load_sleep_edf(config: DataConfig) -> dict[str, dict[str, np.ndarray]]:
     return result
 
 
+def load_sleep_edf_per_subject(
+    config: DataConfig,
+) -> dict[str, dict[str, np.ndarray]]:
+    """Load Sleep-EDF and return per-subject (epochs, labels, spectral).
+
+    Used by the CV runner so each fold can build its own train/val/test
+    split without re-running the EDF→epoch pipeline.
+
+    Returns:
+        {subject_id: {"epochs": (N,C,T), "labels": (N,), "spectral": (N,5,42)}}
+    """
+    cache_dir = Path(config.cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    eog_tag = "_eog" if config.use_eog else ""
+    cache_file = cache_dir / (
+        f"sleepedf20_persubj_ch{config.channel.replace(' ', '_')}{eog_tag}"
+        f"_wt{config.wake_trim_minutes}.npz"
+    )
+    if cache_file.exists():
+        loaded = np.load(cache_file)
+        result: dict[str, dict[str, np.ndarray]] = {}
+        keys = sorted({k.split("__", 1)[0] for k in loaded.files})
+        for sid in keys:
+            entry = {
+                "epochs": loaded[f"{sid}__epochs"],
+                "labels": loaded[f"{sid}__labels"],
+            }
+            sk = f"{sid}__spectral"
+            if sk in loaded.files:
+                entry["spectral"] = loaded[sk]
+            result[sid] = entry
+        return result
+
+    ensure_dataset(data_dir=config.data_dir, study="SC")
+    subject_ids = get_subject_ids(config.num_subjects)
+    data_dir = _find_edf_dir(Path(config.data_dir))
+    needed = set(subject_ids)
+    all_epochs, all_labels = _load_all_subjects(data_dir, config, needed)
+
+    from .spectral import SpectralFeatureExtractor
+    spectral_ext = SpectralFeatureExtractor(config)
+
+    save_dict: dict[str, np.ndarray] = {}
+    result = {}
+    for sid in subject_ids:
+        if sid not in all_epochs:
+            continue
+        epochs = all_epochs[sid]
+        labels = all_labels[sid]
+        spectral = spectral_ext.extract_batch(epochs[:, 0, :]).astype(np.float32)
+        result[sid] = {
+            "epochs": epochs,
+            "labels": labels,
+            "spectral": spectral,
+        }
+        save_dict[f"{sid}__epochs"] = epochs
+        save_dict[f"{sid}__labels"] = labels
+        save_dict[f"{sid}__spectral"] = spectral
+
+    np.savez_compressed(cache_file, **save_dict)
+    return result
+
+
 def _load_all_subjects(
     data_dir: Path,
     config: DataConfig,

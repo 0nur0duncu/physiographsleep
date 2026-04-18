@@ -42,6 +42,27 @@ class LossConfig:
 
 
 @dataclass
+class N1MixupConfig:
+    """N1-targeted Mixup augmentation (literature: PMC 9726872, +N1 acc).
+
+    Mixes ONLY samples whose center label is N1 (class id=1) with a
+    random other-class sample in the *same batch*. Mixup is performed
+    on the raw waveform sequence + spectral features so all downstream
+    encoders see the interpolated signal, while the soft label is fed
+    to the focal loss via standard mixup label-blending.
+
+    All other auxiliary heads (boundary/prev/next/n1_aux) keep the
+    *center* sample's hard label — the augmentation is targeted at
+    N1 boundary disambiguation only.
+    """
+
+    enabled: bool = False
+    prob: float = 0.5         # per-batch probability of triggering mixup
+    alpha: float = 0.4        # Beta(α, α) — small α keeps λ near {0, 1}
+    n1_class_id: int = 1
+
+
+@dataclass
 class TrainConfig:
     """Single-phase joint training configuration.
 
@@ -58,6 +79,7 @@ class TrainConfig:
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     loss: LossConfig = field(default_factory=LossConfig)
+    n1_mixup: N1MixupConfig = field(default_factory=N1MixupConfig)
 
     # Single training schedule
     epochs: int = 60
