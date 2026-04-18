@@ -305,6 +305,7 @@ class Trainer:
         n_batches = 0
         gpu_preds: list[torch.Tensor] = []
         gpu_labels: list[torch.Tensor] = []
+        gpu_preds_gnn: list[torch.Tensor] = []
 
         for batch in self.val_loader:
             signals = batch["signal"].to(self.device, non_blocking=True)
@@ -332,11 +333,21 @@ class Trainer:
             n_batches += 1
             gpu_preds.append(preds["stage"].argmax(dim=1).detach())
             gpu_labels.append(targets["label"].detach())
+            # stage_gnn only exists when λ-fusion is enabled. Capturing
+            # it lets us report the pure-GNN MF1 alongside the fused one
+            # so fusion contribution is observable at every epoch.
+            if "stage_gnn" in preds:
+                gpu_preds_gnn.append(preds["stage_gnn"].argmax(dim=1).detach())
 
         mean_loss = total_loss / max(n_batches, 1)
         all_preds = torch.cat(gpu_preds).cpu().numpy()
         all_labels = torch.cat(gpu_labels).cpu().numpy()
         metrics = self.evaluator.metrics.compute_all(all_labels, all_preds)
+        if gpu_preds_gnn:
+            all_preds_gnn = torch.cat(gpu_preds_gnn).cpu().numpy()
+            gnn_metrics = self.evaluator.metrics.compute_all(all_labels, all_preds_gnn)
+            metrics["macro_f1_gnn"] = gnn_metrics["macro_f1"]
+            metrics["accuracy_gnn"] = gnn_metrics["accuracy"]
         return mean_loss, metrics
 
     # ------------------------------------------------------------------

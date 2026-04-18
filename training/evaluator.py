@@ -37,6 +37,8 @@ class Evaluator:
         all_preds = []
         all_labels = []
         all_logits = []
+        all_preds_gnn: list[np.ndarray] = []   # GPU argmax → CPU numpy per batch
+        all_logits_gnn: list[np.ndarray] = []  # only filled when return_logits
         amp_enabled = self.device.type == "cuda"
         amp_dtype = torch.bfloat16 if (
             amp_enabled and torch.cuda.is_bf16_supported()
@@ -56,16 +58,30 @@ class Evaluator:
             with torch.autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
                 outputs = model(signals, spectral, mask)
                 logits = outputs["stage"]
+                logits_gnn = outputs.get("stage_gnn")
+            # argmax runs on GPU; only the (B,) int tensor crosses PCIe.
             preds = logits.argmax(dim=-1)
 
             all_preds.append(preds.cpu().numpy())
             all_labels.append(labels.cpu().numpy())
+            if logits_gnn is not None:
+                all_preds_gnn.append(logits_gnn.argmax(dim=-1).cpu().numpy())
             if return_logits:
                 all_logits.append(logits.float().cpu().numpy())
+                if logits_gnn is not None:
+                    all_logits_gnn.append(logits_gnn.float().cpu().numpy())
 
         all_preds = np.concatenate(all_preds)
         all_labels = np.concatenate(all_labels)
         metrics = self.metrics.compute_all(all_labels, all_preds)
+        # When λ-fusion is active, surface a pure-GNN MF1 so the caller
+        # can compare against the fused metric (diagnostic only; the
+        # primary metric remains the fused one).
+        if all_preds_gnn:
+            gnn_preds = np.concatenate(all_preds_gnn)
+            gnn_metrics = self.metrics.compute_all(all_labels, gnn_preds)
+            metrics["macro_f1_gnn"] = gnn_metrics["macro_f1"]
+            metrics["accuracy_gnn"] = gnn_metrics["accuracy"]
 
         if return_logits:
             all_logits = np.concatenate(all_logits)
