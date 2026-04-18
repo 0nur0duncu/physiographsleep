@@ -63,12 +63,12 @@ class MultiTaskLoss(nn.Module):
     def update_adaptive_weights(
         self,
         class_f1: np.ndarray,
-        K: float = 10.0,
-        gamma: float = 3.0,
-        eps: float = 1e-4,
+        K: float = 5.0,
+        gamma: float = 1.0,
+        eps: float = 1e-2,
         min_weight: float = 0.5,
-        max_weight: float = 5.0,
-        ema_momentum: float = 0.7,
+        max_weight: float = 3.0,
+        ema_momentum: float = 0.85,
     ) -> None:
         """Update focal loss class weights based on per-class F1 scores.
 

@@ -31,7 +31,6 @@ from ..utils.io_utils import load_checkpoint
 
 logger = logging.getLogger("physiographsleep.trainer")
 logger.propagate = False  # avoid duplicate logs in jupyter/colab
-logger.propagate = False  # avoid duplicate logs in jupyter/colab
 
 
 class Trainer:
@@ -77,14 +76,6 @@ class Trainer:
             device.type == "cuda" and torch.cuda.is_bf16_supported()
         ) else torch.float16
         self.use_scaler = self.amp_enabled and self.amp_dtype == torch.float16
-        # Perf: pick fastest cuDNN kernels for our fixed input shape
-        if device.type == "cuda":
-            torch.backends.cudnn.benchmark = True
-        # bf16 on Ada/Hopper/Blackwell skips GradScaler entirely
-        self.amp_dtype = torch.bfloat16 if (
-            device.type == "cuda" and torch.cuda.is_bf16_supported()
-        ) else torch.float16
-        self.use_scaler = self.amp_enabled and self.amp_dtype == torch.float16
 
     def _build_train_loader(self, n1_boost: float | None = None) -> DataLoader:
         """Build a training DataLoader with optional N1-boosted sampling."""
@@ -116,32 +107,45 @@ class Trainer:
         return False
 
     def train(self, start_stage: str = "A") -> dict[str, float]:
-        """Run curriculum training from a given stage."""
+        """Run curriculum training from a given stage.
+
+        Stage B is optional and disabled by default (controlled by
+        TrainConfig.curriculum.enable_stage_b). Empirically Stage A trains
+        encoder + decoder + heads jointly already, and re-training only the
+        sequence decoder with the encoder frozen yielded no F1_N1 gain.
+        """
         stages = ["A", "B", "C"]
         start_idx = stages.index(start_stage.upper())
+        enable_b = getattr(self.config.curriculum, "enable_stage_b", False)
 
         if start_idx <= 0:
-            logger.info("=== Stage A: Epoch encoder pretraining ===")
+            logger.info("=== Stage A: Joint encoder+decoder pretraining ===")
             self._run_stage_a()
 
-        if start_idx <= 1:
+        if start_idx <= 1 and enable_b:
             self._load_stage_checkpoint("A")
-            logger.info("=== Stage B: Sequence decoder training ===")
+            logger.info("=== Stage B: Sequence decoder fine-tune (encoder frozen) ===")
             self._run_stage_b()
 
         if start_idx <= 2:
-            self._load_stage_checkpoint("B")
+            # Load best of (B if enabled and present, else A)
+            loaded_b = enable_b and self._load_stage_checkpoint("B")
+            if not loaded_b:
+                self._load_stage_checkpoint("A")
             logger.info("=== Stage C: End-to-end fine-tuning ===")
             self._run_stage_c()
 
+        # Final: load best Stage C
         self._load_stage_checkpoint("C")
         return self.best_metrics
 
     # ------------------------------------------------------------------
-    # Stage A: Epoch encoder pretraining (N1 boost 2.0x)
+    # Stage A: Joint encoder + decoder pretraining (N1 boost 2.0x)
     # ------------------------------------------------------------------
     def _run_stage_a(self) -> None:
-        self._freeze_module(self.model.sequence_decoder)
+        # Only freeze auxiliary heads that are not used to drive Stage A objective.
+        # Decoder + main + aux N1 heads remain trainable so the entire pipeline
+        # learns end-to-end with N1 boost from epoch 0.
         self._freeze_module(self.model.heads.boundary_head)
         self._freeze_module(self.model.heads.prev_head)
         self._freeze_module(self.model.heads.next_head)
@@ -157,11 +161,9 @@ class Trainer:
                 optimizer, loader, stage="A",
             )
             train_metrics = self._train_metrics(tr_labels, tr_preds)
-            val_metrics = self.evaluator.evaluate(
-                self.model, self.val_loader, self.spectral_extractor,
-            )
+            val_loss, val_metrics = self._evaluate_with_loss()
 
-            self._log_epoch("A", epoch, train_loss, val_metrics, train_metrics)
+            self._log_epoch("A", epoch, train_loss, val_loss, val_metrics, train_metrics)
             scheduler.step()
 
             self._save_if_best(val_metrics, checkpoint, "A")
@@ -190,11 +192,9 @@ class Trainer:
                 optimizer, loader, stage="B",
             )
             train_metrics = self._train_metrics(tr_labels, tr_preds)
-            val_metrics = self.evaluator.evaluate(
-                self.model, self.val_loader, self.spectral_extractor,
-            )
+            val_loss, val_metrics = self._evaluate_with_loss()
 
-            self._log_epoch("B", epoch, train_loss, val_metrics, train_metrics)
+            self._log_epoch("B", epoch, train_loss, val_loss, val_metrics, train_metrics)
             scheduler.step()
 
             self._save_if_best(val_metrics, checkpoint, "B")
@@ -234,11 +234,9 @@ class Trainer:
                     f"Weights: {[f'{w:.2f}' for w in self.loss_fn.focal.weight.tolist()]}"
                 )
 
-            val_metrics = self.evaluator.evaluate(
-                self.model, self.val_loader, self.spectral_extractor,
-            )
+            val_loss, val_metrics = self._evaluate_with_loss()
 
-            self._log_epoch("C", epoch, train_loss, val_metrics, train_metrics)
+            self._log_epoch("C", epoch, train_loss, val_loss, val_metrics, train_metrics)
             scheduler.step()
 
             self._save_if_best(val_metrics, checkpoint, "C")
@@ -372,7 +370,8 @@ class Trainer:
             logger.info(f"  New best MF1: {metrics['macro_f1']:.4f} -> {filename}")
 
     def _log_epoch(
-        self, stage: str, epoch: int, loss: float, metrics: dict[str, float],
+        self, stage: str, epoch: int, loss: float,
+        val_loss: float, metrics: dict[str, float],
         train_metrics: dict[str, float] | None = None,
     ) -> None:
         train_extra = ""
@@ -383,7 +382,7 @@ class Trainer:
             )
         logger.info(
             f"[{stage}] Epoch {epoch:02d} | "
-            f"Loss={loss:.4f} | "
+            f"TrLoss={loss:.4f} | VlLoss={val_loss:.4f} | "
             f"{train_extra}"
             f"ValACC={metrics['accuracy']:.4f} | "
             f"ValMF1={metrics['macro_f1']:.4f} | "
@@ -392,7 +391,8 @@ class Trainer:
         if self.callback is not None:
             try:
                 self.callback(
-                    stage=stage, epoch=epoch, train_loss=loss,
+                    stage=stage, epoch=epoch,
+                    train_loss=loss, val_loss=val_loss,
                     train_metrics=train_metrics or {}, val_metrics=metrics,
                 )
             except Exception as exc:  # pragma: no cover
@@ -406,3 +406,40 @@ class Trainer:
     def _unfreeze_all(self) -> None:
         for p in self.model.parameters():
             p.requires_grad = True
+
+    @torch.no_grad()
+    def _evaluate_with_loss(self) -> tuple[float, dict[str, float]]:
+        """Run evaluator AND compute mean validation loss in one pass."""
+        self.model.eval()
+        total_loss = 0.0
+        n_batches = 0
+        gpu_preds: list[torch.Tensor] = []
+        gpu_labels: list[torch.Tensor] = []
+
+        for batch in self.val_loader:
+            signals = batch["signal"].to(self.device, non_blocking=True)
+            spectral = batch["spectral"].to(self.device, non_blocking=True) if "spectral" in batch else \
+                self.evaluator._extract_spectral_batch(signals, self.spectral_extractor)
+            targets = {
+                "label":      batch["label"].to(self.device, non_blocking=True),
+                "boundary":   batch["boundary"].to(self.device, non_blocking=True),
+                "prev_label": batch["prev_label"].to(self.device, non_blocking=True),
+                "next_label": batch["next_label"].to(self.device, non_blocking=True),
+                "n1_label":   batch["n1_label"].to(self.device, non_blocking=True),
+            }
+            mask = batch["mask"].to(self.device, non_blocking=True) if "mask" in batch else None
+
+            with autocast("cuda", enabled=self.amp_enabled, dtype=self.amp_dtype):
+                preds = self.model(signals, spectral, mask)
+                losses = self.loss_fn(preds, targets)
+
+            total_loss += losses["total"].item()
+            n_batches += 1
+            gpu_preds.append(preds["stage"].argmax(dim=1).detach())
+            gpu_labels.append(targets["label"].detach())
+
+        mean_loss = total_loss / max(n_batches, 1)
+        all_preds = torch.cat(gpu_preds).cpu().numpy()
+        all_labels = torch.cat(gpu_labels).cpu().numpy()
+        metrics = self.evaluator.metrics.compute_all(all_labels, all_preds)
+        return mean_loss, metrics

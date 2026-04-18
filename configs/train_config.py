@@ -37,28 +37,38 @@ class LossConfig:
 
 @dataclass
 class AdaptiveLossConfig:
-    """Adaptive F1-based loss weight settings (SeriesSleepNet-inspired)."""
+    """Adaptive F1-based loss weight settings (SeriesSleepNet-inspired).
+
+    Conservative defaults to prevent the loss-rebalancing in Stage C from
+    degrading val MF1 (observed regression with K=10, gamma=2 in earlier runs).
+    """
 
     warmup_epochs: int = 5
-    K: float = 10.0
-    gamma: float = 2.0
+    K: float = 5.0
+    gamma: float = 1.0
 
 
 @dataclass
 class CurriculumConfig:
-    """3-stage curriculum training settings."""
+    """3-stage curriculum training settings.
 
-    # Stage A: epoch encoder pretrain
+    NOTE: Stage B is OPTIONAL. Empirically Stage A jointly trains encoder +
+    decoder + heads, and a subsequent encoder-frozen Stage B yielded no F1_N1
+    improvement (only train loss decreased). Default OFF.
+    """
+
+    # Stage A: joint encoder + decoder pretrain (with N1 boost)
     stage_a_epochs: int = 30
     stage_a_lr: float = 1e-3
 
-    # Stage B: sequence decoder (encoder frozen)
-    stage_b_epochs: int = 25
+    # Stage B (optional): freeze encoder, fine-tune decoder only
+    enable_stage_b: bool = False
+    stage_b_epochs: int = 15
     stage_b_lr: float = 1e-4
 
-    # Stage C: end-to-end fine-tune
-    stage_c_epochs: int = 25
-    stage_c_lr: float = 1e-4
+    # Stage C: end-to-end fine-tune with adaptive loss
+    stage_c_epochs: int = 20
+    stage_c_lr: float = 5e-5
 
 
 @dataclass
@@ -72,7 +82,7 @@ class TrainConfig:
     adaptive_loss: AdaptiveLossConfig = field(default_factory=AdaptiveLossConfig)
 
     # General
-    patience: int = 15
+    patience: int = 10
 
     # Logging
     log_dir: str = "logs"
