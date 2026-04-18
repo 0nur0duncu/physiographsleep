@@ -54,9 +54,9 @@ class HeteroGraphConfig:
     num_heads: int = 6
     num_layers: int = 3
     dropout: float = 0.2
-    # drop_path 0.1 → 0.2: stochastic depth at deeper layers (the
-    # "all-edges" pathway layer) was insufficient regularisation.
-    drop_path: float = 0.2
+    # drop_path 0.1: validated default. 0.2 was tested April 2026 and
+    # killed F1_N1 (signal too sparse through 3 graph layers).
+    drop_path: float = 0.1
     num_patch_nodes: int = 6
     num_band_nodes: int = 5
     num_summary_nodes: int = 1
