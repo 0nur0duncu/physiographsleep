@@ -37,27 +37,31 @@ class Evaluator:
         all_preds = []
         all_labels = []
         all_logits = []
+        amp_enabled = self.device.type == "cuda"
+        amp_dtype = torch.bfloat16 if (
+            amp_enabled and torch.cuda.is_bf16_supported()
+        ) else torch.float16
 
         for batch in dataloader:
-            signals = batch["signal"].to(self.device)       # (B, L, C, T)
-            labels = batch["label"].to(self.device)          # (B,)
-            mask = batch["mask"].to(self.device) if "mask" in batch else None
+            signals = batch["signal"].to(self.device, non_blocking=True)
+            labels = batch["label"].to(self.device, non_blocking=True)
+            mask = batch["mask"].to(self.device, non_blocking=True) if "mask" in batch else None
 
-            # Use pre-computed spectral features if available
             if "spectral" in batch:
-                spectral = batch["spectral"].to(self.device)
+                spectral = batch["spectral"].to(self.device, non_blocking=True)
             else:
                 B, L, C, T = signals.shape
                 spectral = self._extract_spectral_batch(signals, spectral_extractor)
 
-            outputs = model(signals, spectral, mask)
-            logits = outputs["stage"]              # (B, 5)
-            preds = logits.argmax(dim=-1)          # (B,)
+            with torch.autocast("cuda", enabled=amp_enabled, dtype=amp_dtype):
+                outputs = model(signals, spectral, mask)
+                logits = outputs["stage"]
+            preds = logits.argmax(dim=-1)
 
             all_preds.append(preds.cpu().numpy())
             all_labels.append(labels.cpu().numpy())
             if return_logits:
-                all_logits.append(logits.cpu().numpy())
+                all_logits.append(logits.float().cpu().numpy())
 
         all_preds = np.concatenate(all_preds)
         all_labels = np.concatenate(all_labels)

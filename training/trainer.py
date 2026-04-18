@@ -30,6 +30,7 @@ from .scheduler import build_scheduler
 from ..utils.io_utils import load_checkpoint
 
 logger = logging.getLogger("physiographsleep.trainer")
+logger.propagate = False  # avoid duplicate logs in jupyter/colab
 
 
 class Trainer:
@@ -67,31 +68,29 @@ class Trainer:
         self.scaler = GradScaler("cuda", enabled=device.type == "cuda")
         self.amp_enabled = device.type == "cuda"
         self.callback = callback
+        # Perf: pick fastest cuDNN kernels for our fixed input shape
+        if device.type == "cuda":
+            torch.backends.cudnn.benchmark = True
+        # bf16 on Ada/Hopper/Blackwell skips GradScaler entirely
+        self.amp_dtype = torch.bfloat16 if (
+            device.type == "cuda" and torch.cuda.is_bf16_supported()
+        ) else torch.float16
+        self.use_scaler = self.amp_enabled and self.amp_dtype == torch.float16
 
     def _build_train_loader(self, n1_boost: float | None = None) -> DataLoader:
         """Build a training DataLoader with optional N1-boosted sampling."""
-        if n1_boost is not None and n1_boost > 1.0:
-            sampler = build_weighted_sampler(self.train_labels, n1_boost=n1_boost)
-            return DataLoader(
-                self.train_dataset,
-                batch_size=self.data_config.batch_size,
-                sampler=sampler,
-                num_workers=self.data_config.num_workers,
-                pin_memory=True,
-                drop_last=True,
-                persistent_workers=self.data_config.num_workers > 0,
-                prefetch_factor=2 if self.data_config.num_workers > 0 else None,
-            )
-        return DataLoader(
-            self.train_dataset,
+        common = dict(
             batch_size=self.data_config.batch_size,
-            shuffle=True,
             num_workers=self.data_config.num_workers,
             pin_memory=True,
             drop_last=True,
             persistent_workers=self.data_config.num_workers > 0,
-            prefetch_factor=2 if self.data_config.num_workers > 0 else None,
+            prefetch_factor=4 if self.data_config.num_workers > 0 else None,
         )
+        if n1_boost is not None and n1_boost > 1.0:
+            sampler = build_weighted_sampler(self.train_labels, n1_boost=n1_boost)
+            return DataLoader(self.train_dataset, sampler=sampler, **common)
+        return DataLoader(self.train_dataset, shuffle=True, **common)
 
     def _load_stage_checkpoint(self, stage: str) -> bool:
         """Load best checkpoint for given stage. Returns True if loaded."""
@@ -251,53 +250,63 @@ class Trainer:
         self.model.train()
         total_loss = 0.0
         num_batches = 0
-        all_preds: list[np.ndarray] = []
-        all_labels: list[np.ndarray] = []
 
         pbar = tqdm(loader, desc=f"Train {stage}", leave=False)
+        gpu_preds: list[torch.Tensor] = []
+        gpu_labels: list[torch.Tensor] = []
         for batch in pbar:
-            signals = batch["signal"].to(self.device)
+            signals = batch["signal"].to(self.device, non_blocking=True)
 
             if "spectral" in batch:
-                spectral = batch["spectral"].to(self.device)
+                spectral = batch["spectral"].to(self.device, non_blocking=True)
             else:
                 spectral = self.evaluator._extract_spectral_batch(
                     signals, self.spectral_extractor,
                 )
 
             targets = {
-                "label": batch["label"].to(self.device),
-                "boundary": batch["boundary"].to(self.device),
-                "prev_label": batch["prev_label"].to(self.device),
-                "next_label": batch["next_label"].to(self.device),
-                "n1_label": batch["n1_label"].to(self.device),
+                "label":      batch["label"].to(self.device, non_blocking=True),
+                "boundary":   batch["boundary"].to(self.device, non_blocking=True),
+                "prev_label": batch["prev_label"].to(self.device, non_blocking=True),
+                "next_label": batch["next_label"].to(self.device, non_blocking=True),
+                "n1_label":   batch["n1_label"].to(self.device, non_blocking=True),
             }
 
-            mask = batch["mask"].to(self.device) if "mask" in batch else None
+            mask = batch["mask"].to(self.device, non_blocking=True) if "mask" in batch else None
 
-            with autocast("cuda", enabled=self.amp_enabled):
+            with autocast("cuda", enabled=self.amp_enabled, dtype=self.amp_dtype):
                 predictions = self.model(signals, spectral, mask)
                 losses = self.loss_fn(predictions, targets)
 
-            optimizer.zero_grad()
-            self.scaler.scale(losses["total"]).backward()
-            self.scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), self.config.optimizer.grad_clip,
-            )
-            self.scaler.step(optimizer)
-            self.scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+            if self.use_scaler:
+                self.scaler.scale(losses["total"]).backward()
+                self.scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.config.optimizer.grad_clip,
+                )
+                self.scaler.step(optimizer)
+                self.scaler.update()
+            else:
+                losses["total"].backward()
+                torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.config.optimizer.grad_clip,
+                )
+                optimizer.step()
 
             total_loss += losses["total"].item()
             num_batches += 1
             pbar.set_postfix(loss=f"{total_loss/num_batches:.4f}")
 
+            # Keep on GPU; transfer once after epoch (saves ~1k device syncs)
             with torch.no_grad():
-                all_preds.append(predictions["stage"].argmax(dim=1).cpu().numpy())
-                all_labels.append(targets["label"].cpu().numpy())
+                gpu_preds.append(predictions["stage"].argmax(dim=1).detach())
+                gpu_labels.append(targets["label"].detach())
 
         mean_loss = total_loss / max(num_batches, 1)
-        return mean_loss, np.concatenate(all_preds), np.concatenate(all_labels)
+        all_preds = torch.cat(gpu_preds).cpu().numpy()
+        all_labels = torch.cat(gpu_labels).cpu().numpy()
+        return mean_loss, all_preds, all_labels
 
     def _train_metrics(
         self, labels: np.ndarray, preds: np.ndarray,

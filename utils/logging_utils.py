@@ -13,6 +13,7 @@ def setup_logger(
     """Create a logger with console and optional file handlers."""
     logger = logging.getLogger(name)
     logger.setLevel(level)
+    logger.propagate = False  # avoid duplicate logs in jupyter/colab
 
     if logger.handlers:
         return logger
