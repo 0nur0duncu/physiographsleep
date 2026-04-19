@@ -172,6 +172,12 @@ class MultiTaskLoss(nn.Module):
         losses["next"] = self.ce(predictions["next"], targets["next_label"])
         losses["n1"] = self.bce(predictions["n1"], targets["n1_label"])
 
+        # Deep-supervision for GNN branch when fusion is active.
+        # Without this, detach_gnn_for_lambda=True severs all stage-loss
+        # gradient to the GNN encoder, causing the branch to collapse.
+        if "stage_gnn" in predictions and self.config.gnn_stage_weight > 0:
+            losses["stage_gnn"] = self.focal(predictions["stage_gnn"], stage_target)
+
         total = (
             self.config.stage_weight * losses["stage"]
             + self.config.boundary_weight * losses["boundary"]
@@ -179,5 +185,7 @@ class MultiTaskLoss(nn.Module):
             + self.config.next_stage_weight * losses["next"]
             + self.config.n1_aux_weight * losses["n1"]
         )
+        if "stage_gnn" in losses:
+            total = total + self.config.gnn_stage_weight * losses["stage_gnn"]
         losses["total"] = total
         return losses

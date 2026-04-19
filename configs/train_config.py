@@ -49,6 +49,10 @@ class LossConfig:
     prev_stage_weight: float = 0.20
     next_stage_weight: float = 0.20
     n1_aux_weight: float = 0.30
+    # GNN branch deep-supervision weight (only active when fusion is ON).
+    # Without this, detach_gnn_for_lambda=True cuts all stage-loss gradient
+    # to the GNN branch, causing it to collapse.
+    gnn_stage_weight: float = 0.5
     focal_gamma: float = 2.0
     # label_smoothing 0.0: val_loss drift (epoch 2'den sonra yükseliş)
     # FocalLoss(γ=2)'nin inherent overconfidence davranışından kaynaklanır.
