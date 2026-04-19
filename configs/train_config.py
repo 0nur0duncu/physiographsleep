@@ -50,16 +50,14 @@ class LossConfig:
     next_stage_weight: float = 0.20
     n1_aux_weight: float = 0.30
     focal_gamma: float = 2.0
-    # label_smoothing 0.0: FocalLoss (γ=2) already provides strong
-    # regularization against over-confident predictions. Stacking
-    # label_smoothing on top caused persistent val_loss drift (1.11 →
-    # 1.53 over 25 epochs) even as val_MF1 kept rising — the smoothed
-    # target prevents p_t from ever reaching 1.0, so the loss plateaus
-    # above its achievable minimum while accuracy still improves. Early
-    # stopping on MF1 masked the symptom but the divergence is real.
-    # Setting ls=0.0 makes val_loss track val_MF1 monotonically, which
-    # is what the chatbot analysis flagged (correctly, as a symptom —
-    # their proposed fixes were wrong but the observation was valid).
+    # label_smoothing 0.0: val_loss drift (epoch 2'den sonra yükseliş)
+    # FocalLoss(γ=2)'nin inherent overconfidence davranışından kaynaklanır.
+    # ls=0.05 kullanıldığında drift daha büyük (1.11→1.53), ls=0.0 ile
+    # daha küçük (0.64→0.92) ama tamamen yok olmuyor. Çünkü FocalLoss
+    # zor örneklere odaklanırken kolay örneklerde logit büyütmeye devam
+    # eder → cross-entropy bileşeni bunu cezalandırır.
+    # Best-checkpoint MF1 ile seçildiğinden (loss değil) pratik sorun yok.
+    # ls=0.05 ileride bir ablation olarak test edilebilir.
     label_smoothing: float = 0.0
 
 
