@@ -32,7 +32,10 @@ class SchedulerConfig:
     in SleepTransformer / AttnSleep / ViT literature.
     """
 
-    t_max: int = 60
+    # t_max 30: 20-epoch Sleep-EDF-20 runs (April 2026) show val MF1
+    # plateauing after epoch ~13 (ΔMF1 < 0.005 per epoch). 60 epoch
+    # cosine tail was 2× wasted compute with no measurable MF1 gain.
+    t_max: int = 30
     eta_min: float = 1e-6
     warmup_epochs: int = 3
 
@@ -95,19 +98,22 @@ class TrainConfig:
     n1_mixup: N1MixupConfig | None = field(default_factory=N1MixupConfig)
 
     # Single training schedule
-    epochs: int = 60
+    # epochs 30: matches scheduler.t_max. Empirically val MF1 plateaus
+    # around epoch 13-17 on Sleep-EDF-20 (April 2026); 60 epochs gave
+    # no MF1 gain over 30 in multiple runs. Increase for larger datasets.
+    epochs: int = 30
     lr: float = 1e-3
     # Sampler inverse-frequency already gives N1 ~7x boost vs N2.
     # Extra n1_boost multiplies on top; 2.0 -> effective 14x (too noisy,
     # caused F1_N1 oscillation). 1.3 is a mild reinforcement that keeps
     # N1 presence without drowning the batch in N1-like patterns.
     n1_boost: float = 1.3
-    # Patience 15: with 3-epoch warmup, real training starts at epoch 3.
-    # Best MF1 often lands around epoch 8-12; cosine annealing's fine-
-    # tuning benefit peaks around epoch 20-40. patience=10 caused early
-    # stop at ~epoch 13 before the model could benefit from lower LR.
-    # 15 = enough headroom for post-warmup cosine phase.
-    patience: int = 15
+    # Patience 10: with 3-epoch warmup and 30-epoch cosine, plateau
+    # reliably triggers by epoch 13-17 (ΔMF1 < 0.005). patience=15 was
+    # too cheap — allowed 5 extra epochs of noise at the tail of the
+    # cosine schedule with no gain. 10 stops within ~3-5 epochs of
+    # plateau onset, preserving best.pt.
+    patience: int = 10
     # Exponential Moving Average of model weights. SleepTransformer /
     # XSleepNet standard: stabilises val metrics + adds ~0.01-0.02 MF1.
     ema_decay: float = 0.999
