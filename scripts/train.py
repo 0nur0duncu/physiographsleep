@@ -27,7 +27,11 @@ from physiographsleep.data.dataset import SleepEDFDataset
 from physiographsleep.data.loader import load_sleep_edf
 from physiographsleep.data.spectral import SpectralFeatureExtractor
 from physiographsleep.data.transforms import SleepTransforms
-from physiographsleep.models.losses import MultiTaskLoss
+from physiographsleep.models.losses import (
+    MultiTaskLoss,
+    compute_inverse_freq_weights,
+    compute_class_balanced_weights,
+)
 from physiographsleep.models.physiographsleep import PhysioGraphSleep
 from physiographsleep.training.trainer import Trainer
 from physiographsleep.utils.logging_utils import setup_logger
@@ -91,12 +95,20 @@ def main() -> None:
     for name, count in param_counts.items():
         logger.info(f"  {name}: {count:,}")
 
-    # Loss
+    # Loss — weight strategy
     class_counts = np.bincount(data["train"]["labels"], minlength=5)
-    class_weights = 1.0 / (class_counts.astype(np.float32) + 1e-6)
-    class_weights = class_weights / class_weights.sum() * 5
+    ws = config.train.loss.weight_strategy
 
-    class_weights_tensor = torch.from_numpy(class_weights).float()
+    if ws == "inverse_freq":
+        cw_np = compute_inverse_freq_weights(class_counts)
+        class_weights_tensor = torch.from_numpy(cw_np).float()
+    elif ws == "class_balanced":
+        cw_np = compute_class_balanced_weights(class_counts, beta=config.train.loss.cb_beta)
+        class_weights_tensor = torch.from_numpy(cw_np).float()
+    elif ws == "adaptive_f1":
+        class_weights_tensor = torch.ones(5)
+    else:
+        class_weights_tensor = None
 
     loss_fn = MultiTaskLoss(
         config.train.loss,

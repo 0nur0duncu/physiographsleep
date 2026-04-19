@@ -60,6 +60,23 @@ class LossConfig:
     # ls=0.05 ileride bir ablation olarak test edilebilir.
     label_smoothing: float = 0.0
 
+    # --- Class weight strategy ---
+    # "none"         : No class weights on focal loss (current default).
+    # "inverse_freq" : Static 1/count weights (original approach).
+    # "class_balanced": Cui et al. 2019 effective-number weights.
+    # "adaptive_f1"  : SeriesSleepNet-style per-epoch F1-based dynamic
+    #                  weights. First `adaptive_warmup` epochs use
+    #                  uniform weights, then W_i = 1 - log_K(CF_i)^γ_a.
+    weight_strategy: str = "none"
+
+    # Adaptive F1-based weight hyperparams (SeriesSleepNet, Frontiers 2023)
+    adaptive_warmup: int = 5    # epochs with uniform weights before adapting
+    adaptive_K: float = 10.0    # log base for weight formula
+    adaptive_gamma: float = 3.0  # exponent for weight formula
+
+    # Class-balanced effective number (Cui et al. CVPR 2019)
+    cb_beta: float = 0.9999     # β ∈ {0.9, 0.99, 0.999, 0.9999}
+
 
 @dataclass
 class N1MixupConfig:

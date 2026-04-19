@@ -31,7 +31,10 @@ class MetricsCalculator:
         """
         result = {
             "accuracy": accuracy_score(y_true, y_pred),
-            "macro_f1": f1_score(y_true, y_pred, average="macro", zero_division=0),
+            "macro_f1": f1_score(
+                y_true, y_pred, average="macro",
+                zero_division=0, labels=range(5),
+            ),
             "kappa": cohen_kappa_score(y_true, y_pred),
             "mcc": matthews_corrcoef(y_true, y_pred),
         }

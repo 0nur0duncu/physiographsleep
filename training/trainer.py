@@ -27,7 +27,7 @@ from ..configs.train_config import TrainConfig
 from ..data.sampler import build_weighted_sampler
 from ..data.spectral import SpectralFeatureExtractor
 from ..data.n1_mixup import apply_n1_mixup
-from ..models.losses import MultiTaskLoss
+from ..models.losses import MultiTaskLoss, compute_adaptive_f1_weights
 from ..models.physiographsleep import PhysioGraphSleep
 from .callbacks import EarlyStopping, ModelCheckpoint
 from .ema import ModelEMA
@@ -109,6 +109,26 @@ class Trainer:
                 optimizer, loader, ema=ema,
             )
             train_metrics = self._train_metrics(tr_labels, tr_preds)
+
+            # Adaptive F1-based weight update (SeriesSleepNet, Frontiers 2023)
+            loss_cfg = self.config.loss
+            if (
+                loss_cfg.weight_strategy == "adaptive_f1"
+                and epoch >= loss_cfg.adaptive_warmup
+                and "per_class_f1" in train_metrics
+            ):
+                new_w = compute_adaptive_f1_weights(
+                    np.array(train_metrics["per_class_f1"]),
+                    K=loss_cfg.adaptive_K,
+                    gamma=loss_cfg.adaptive_gamma,
+                )
+                self.loss_fn.update_focal_weights(torch.from_numpy(new_w).float())
+                if epoch == loss_cfg.adaptive_warmup:
+                    logger.info(
+                        f"  Adaptive F1 weights activated (epoch {epoch}): "
+                        f"{np.array2string(new_w, precision=2)}"
+                    )
+
             # Evaluate with EMA weights swapped into the live model.
             with ema.swap_into(self.model):
                 val_loss, val_metrics = self._evaluate_with_loss()
