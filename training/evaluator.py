@@ -117,13 +117,19 @@ class Evaluator:
                 "`spectral=...` in the dataset or pass an extractor."
             )
 
-        sig_np = signals[:, :, 0, :].cpu().numpy()  # (B, L, T)
+        # Pass the full multi-channel signal to the extractor. For 1ch
+        # inputs this produces (B, L, 5, 42); for 2ch it produces
+        # (B, L, 5, 84) — matching the feature dimension the encoder
+        # was configured for via sync_channel_config().
+        sig_np = signals.cpu().numpy()  # (B, L, C, T)
         specs = []
         for b in range(B):
             seq_specs = []
             for t in range(L):
-                feat = extractor.extract_epoch(sig_np[b, t])  # (5, 42)
+                # extract_batch expects (B, C, T); feed a single epoch
+                # as (1, C, T) and strip the batch dim from the output.
+                feat = extractor.extract_batch(sig_np[b, t : t + 1])[0]
                 seq_specs.append(feat)
             specs.append(np.stack(seq_specs))
-        specs = np.stack(specs)  # (B, L, 5, 42)
+        specs = np.stack(specs)  # (B, L, 5, 42*C)
         return torch.from_numpy(specs).float().to(device)

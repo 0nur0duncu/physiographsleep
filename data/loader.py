@@ -96,9 +96,12 @@ def load_sleep_edf(config: DataConfig) -> dict[str, dict[str, np.ndarray]]:
         if split_epochs:
             epochs = np.concatenate(split_epochs, axis=0)
             labels = np.concatenate(split_labels, axis=0)
-            # Compute spectral: extract from channel 0
+            # Spectral features are extracted from ALL available channels
+            # (EEG-only → (N, 5, 42); EEG+EOG → (N, 5, 84)). Previously
+            # only channel 0 was used, which silently discarded EOG
+            # information in 2-channel runs.
             print(f"  {split_name}: computing spectral for {len(labels)} epochs...")
-            spectral = spectral_ext.extract_batch(epochs[:, 0, :])
+            spectral = spectral_ext.extract_batch(epochs)
             print(f"  {split_name}: {len(labels)} epochs, spectral {spectral.shape}")
             result[split_name] = {
                 "epochs": epochs,
@@ -159,7 +162,8 @@ def load_sleep_edf_per_subject(
             continue
         epochs = all_epochs[sid]
         labels = all_labels[sid]
-        spectral = spectral_ext.extract_batch(epochs[:, 0, :]).astype(np.float32)
+        # Extract spectral features from ALL channels (1 or 2).
+        spectral = spectral_ext.extract_batch(epochs).astype(np.float32)
         result[sid] = {
             "epochs": epochs,
             "labels": labels,

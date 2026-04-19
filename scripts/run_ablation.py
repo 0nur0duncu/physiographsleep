@@ -100,7 +100,10 @@ def patch_config(
         cfg.train.n1_mixup = N1MixupConfig(prob=0.2, alpha=0.2)
         if hasattr(cfg.data, "use_eog"):
             cfg.data.use_eog = True
-            cfg.model.waveform.in_channels = cfg.data.num_input_channels
+            # sync_channel_config updates both waveform.in_channels AND
+            # spectral.features_per_band for true 2-channel support.
+            from ..configs.experiment_config import sync_channel_config
+            sync_channel_config(cfg)
     else:
         raise ValueError(f"Unknown ablation config '{name}'")
     return name, cfg

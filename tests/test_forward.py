@@ -133,6 +133,92 @@ def test_full_model():
     print(f"\n✓ Total parameters: {counts['total']:,} (< 1.2M budget)")
 
 
+# ---------------------------------------------------------------------------
+# Two-channel (EEG + EOG) support — guarantees that flipping use_eog=True
+# yields a functional forward pass and does not break the 1-channel path.
+# ---------------------------------------------------------------------------
+def test_waveform_stem_two_channel():
+    cfg = WaveformStemConfig()
+    cfg.in_channels = 2
+    model = WaveformStem(cfg)
+    x = torch.randn(B, 2, T)
+    out = model(x)
+    assert out.shape == (B, 6, 96), f"2ch stem: {out.shape}"
+    # The 2-channel path must introduce more parameters than 1ch
+    # (depthwise groups=2 → separate filter bank per channel).
+    one_ch = WaveformStem(WaveformStemConfig())
+    assert sum(p.numel() for p in model.parameters()) > sum(p.numel() for p in one_ch.parameters())
+    print(f"✓ WaveformStem 2ch: {out.shape}")
+
+
+def test_spectral_encoder_two_channel():
+    from physiographsleep.configs.model_config import SpectralEncoderConfig
+    cfg = SpectralEncoderConfig()
+    cfg.features_per_band = 84  # 42 features × 2 channels
+    model = SpectralTokenEncoder(cfg)
+    x = torch.randn(B, 5, 84)
+    out = model(x)
+    assert out.shape == (B, 5, 96), f"2ch spectral: {out.shape}"
+    print(f"✓ SpectralTokenEncoder 2ch: {out.shape}")
+
+
+def test_full_model_two_channel_via_sync():
+    """End-to-end 2ch forward pass using sync_channel_config()."""
+    from physiographsleep.configs import ExperimentConfig, sync_channel_config
+    cfg = ExperimentConfig()
+    cfg.data.use_eog = True
+    sync_channel_config(cfg)
+    # After sync both waveform and spectral dims must match 2ch.
+    assert cfg.model.waveform.in_channels == 2
+    assert cfg.model.spectral.features_per_band == 84
+    model = PhysioGraphSleep(cfg.model)
+    signals = torch.randn(B, L, 2, T)
+    spectral = torch.randn(B, L, 5, 84)
+    out = model(signals, spectral)
+    assert out["stage"].shape == (B, 5)
+    print(f"✓ Full model 2ch forward OK (spectral={spectral.shape})")
+
+
+def test_sync_channel_config_idempotent():
+    """Calling sync_channel_config multiple times is safe."""
+    from physiographsleep.configs import ExperimentConfig, sync_channel_config
+    cfg = ExperimentConfig()
+    # 1ch → defaults
+    assert cfg.model.waveform.in_channels == 1
+    assert cfg.model.spectral.features_per_band == 42
+    # Flip on
+    cfg.data.use_eog = True
+    sync_channel_config(cfg)
+    sync_channel_config(cfg)
+    assert cfg.model.waveform.in_channels == 2
+    assert cfg.model.spectral.features_per_band == 84
+    # Flip off — must restore 1ch dims.
+    cfg.data.use_eog = False
+    sync_channel_config(cfg)
+    assert cfg.model.waveform.in_channels == 1
+    assert cfg.model.spectral.features_per_band == 42
+    print("✓ sync_channel_config is idempotent and reversible")
+
+
+def test_spectral_extractor_two_channel():
+    """SpectralFeatureExtractor.extract_batch handles (B, C, T) inputs."""
+    import numpy as np
+    from physiographsleep.configs.data_config import DataConfig
+    from physiographsleep.data.spectral import SpectralFeatureExtractor
+    cfg = DataConfig()
+    extractor = SpectralFeatureExtractor(cfg)
+    # 1ch (B, T)
+    out1 = extractor.extract_batch(np.random.randn(3, cfg.epoch_samples).astype(np.float32))
+    assert out1.shape == (3, 5, 42)
+    # 1ch (B, 1, T)
+    out2 = extractor.extract_batch(np.random.randn(3, 1, cfg.epoch_samples).astype(np.float32))
+    assert out2.shape == (3, 5, 42)
+    # 2ch (B, 2, T)
+    out3 = extractor.extract_batch(np.random.randn(3, 2, cfg.epoch_samples).astype(np.float32))
+    assert out3.shape == (3, 5, 84), f"2ch extractor: {out3.shape}"
+    print(f"✓ SpectralFeatureExtractor 1ch={out1.shape} 2ch={out3.shape}")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("PhysioGraphSleep — Forward Pass Smoke Tests")

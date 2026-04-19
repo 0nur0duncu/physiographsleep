@@ -54,18 +54,48 @@ class SpectralFeatureExtractor:
         """Extract spectral features for a batch.
 
         Args:
-            signals: (B, T) or (B, 1, T)
+            signals: (B, T) — single-channel
+                     (B, 1, T) — single-channel with explicit channel axis
+                     (B, C, T) — multi-channel (C >= 2); features are
+                                 concatenated along the feature axis so
+                                 every channel contributes independent
+                                 spectral descriptors (literature-standard
+                                 early fusion for multi-modal PSG).
 
         Returns:
-            features: (B, 5, 42)
+            features: (B, 5, 42 * C)  where C is the number of channels
+                      present in `signals`. For C=1 this is (B, 5, 42).
         """
-        if signals.ndim == 3:
-            signals = signals[:, 0, :]
         from tqdm import tqdm
-        return np.stack(
-            [self.extract_epoch(s) for s in tqdm(signals, desc="Spectral features", leave=False)],
-            axis=0,
-        )
+        if signals.ndim == 2:
+            # (B, T) → treat as single-channel
+            return np.stack(
+                [self.extract_epoch(s) for s in tqdm(
+                    signals, desc="Spectral features", leave=False,
+                )],
+                axis=0,
+            )
+        if signals.ndim != 3:
+            raise ValueError(
+                f"Expected signals of shape (B, T) or (B, C, T), got {signals.shape}"
+            )
+
+        # (B, C, T): extract per-channel, concatenate features along axis 2.
+        B, C, _ = signals.shape
+        per_channel = []
+        for c in range(C):
+            per_channel.append(
+                np.stack(
+                    [self.extract_epoch(s) for s in tqdm(
+                        signals[:, c, :],
+                        desc=f"Spectral ch{c}",
+                        leave=False,
+                    )],
+                    axis=0,
+                )
+            )
+        # Each element is (B, 5, 42); concat along feature dim → (B, 5, 42*C)
+        return np.concatenate(per_channel, axis=2)
 
     def _split_patches(self, signal: np.ndarray) -> list[np.ndarray]:
         """Split epoch into 6 non-overlapping 5-second patches."""
