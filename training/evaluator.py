@@ -107,7 +107,15 @@ class Evaluator:
         device = signals.device
 
         if extractor is None:
-            return torch.zeros(B, L, 5, 42, device=device)
+            # Silent zero-fill silently poisons training/eval (the spectral
+            # branch receives no information). Fail loudly instead — the
+            # caller should either pre-compute spectral in the dataset or
+            # pass a SpectralFeatureExtractor.
+            raise RuntimeError(
+                "Spectral features missing from batch and no "
+                "SpectralFeatureExtractor was provided. Supply "
+                "`spectral=...` in the dataset or pass an extractor."
+            )
 
         sig_np = signals[:, :, 0, :].cpu().numpy()  # (B, L, T)
         specs = []

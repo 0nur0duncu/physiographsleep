@@ -34,7 +34,7 @@ class SchedulerConfig:
 
     t_max: int = 60
     eta_min: float = 1e-6
-    warmup_epochs: int = 5
+    warmup_epochs: int = 3
 
 
 @dataclass
@@ -102,11 +102,12 @@ class TrainConfig:
     # caused F1_N1 oscillation). 1.3 is a mild reinforcement that keeps
     # N1 presence without drowning the batch in N1-like patterns.
     n1_boost: float = 1.3
-    # Patience 10: val_loss inflects around epoch 4-5 but val MF1 keeps
-    # improving for several more epochs. patience=6 was too tight (April
-    # 2026 run undertrained at MF1 0.71 vs 0.78 baseline). 10 = enough
-    # headroom while still catching real divergence.
-    patience: int = 10
+    # Patience 15: with 3-epoch warmup, real training starts at epoch 3.
+    # Best MF1 often lands around epoch 8-12; cosine annealing's fine-
+    # tuning benefit peaks around epoch 20-40. patience=10 caused early
+    # stop at ~epoch 13 before the model could benefit from lower LR.
+    # 15 = enough headroom for post-warmup cosine phase.
+    patience: int = 15
     # Exponential Moving Average of model weights. SleepTransformer /
     # XSleepNet standard: stabilises val metrics + adds ~0.01-0.02 MF1.
     ema_decay: float = 0.999
