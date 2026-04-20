@@ -1,6 +1,8 @@
-"""Post-processing: HMM Viterbi smoothing + logit bias threshold optimization."""
+"""Post-processing: HMM Viterbi smoothing + logit bias + temperature scaling."""
 
 import numpy as np
+import torch
+import torch.nn.functional as F
 from scipy.optimize import minimize
 from sklearn.metrics import f1_score
 
@@ -213,3 +215,149 @@ class LogitBiasOptimizer:
             raise RuntimeError("Call fit() before apply()")
         adjusted = logits + self.bias
         return adjusted.argmax(axis=1)
+
+
+class TemperatureScaling:
+    """Post-hoc temperature scaling (Guo et al., ICML 2017).
+
+    Calibrates a trained model by finding a single scalar T > 0 that
+    minimises NLL on a held-out validation set.  The calibrated logits
+    are ``logits / T``.  Because division by a positive scalar preserves
+    argmax, accuracy and macro-F1 are unchanged; only the softmax
+    probabilities (and thus NLL / ECE / Brier) improve when the raw
+    model is over- or under-confident.
+
+    Usage:
+        ts = TemperatureScaling().fit(val_logits, val_labels)
+        scaled = ts.apply(test_logits)          # (N, C) calibrated logits
+        probs  = ts.predict_proba(test_logits)  # (N, C) calibrated probs
+    """
+
+    def __init__(self) -> None:
+        self.T: float = 1.0
+        self.nll_before: float | None = None
+        self.nll_after: float | None = None
+
+    def fit(
+        self,
+        val_logits: np.ndarray,
+        val_labels: np.ndarray,
+        max_iter: int = 200,
+    ) -> "TemperatureScaling":
+        """Optimise T on validation logits using LBFGS on NLL.
+
+        Args:
+            val_logits: (N, C) raw model logits on the validation set
+            val_labels: (N,) integer labels
+            max_iter:   LBFGS iteration budget
+
+        Returns:
+            self
+        """
+        logits = torch.from_numpy(val_logits).float()
+        labels = torch.from_numpy(val_labels).long()
+
+        with torch.no_grad():
+            self.nll_before = float(F.cross_entropy(logits, labels).item())
+
+        # log_T is optimised to keep T strictly positive (T = exp(log_T)).
+        log_T = torch.zeros(1, requires_grad=True)
+        optimizer = torch.optim.LBFGS(
+            [log_T], lr=0.1, max_iter=max_iter, line_search_fn="strong_wolfe",
+        )
+
+        def closure() -> torch.Tensor:
+            optimizer.zero_grad()
+            T = log_T.exp()
+            loss = F.cross_entropy(logits / T, labels)
+            loss.backward()
+            return loss
+
+        optimizer.step(closure)
+
+        with torch.no_grad():
+            T = log_T.exp().item()
+            self.T = float(T)
+            self.nll_after = float(
+                F.cross_entropy(logits / log_T.exp(), labels).item()
+            )
+
+        print(
+            f"Temperature scaling: T={self.T:.4f}  "
+            f"NLL {self.nll_before:.4f} → {self.nll_after:.4f} "
+            f"({'over-confident' if self.T > 1.0 else 'under-confident' if self.T < 1.0 else 'calibrated'})"
+        )
+        return self
+
+    def apply(self, logits: np.ndarray) -> np.ndarray:
+        """Return calibrated logits (logits / T). Argmax is preserved."""
+        return logits / self.T
+
+    def predict_proba(self, logits: np.ndarray) -> np.ndarray:
+        """Return calibrated softmax probabilities (N, C)."""
+        return F.softmax(torch.from_numpy(logits / self.T).float(), dim=-1).numpy()
+
+
+# ------------------------------------------------------------------
+# Calibration diagnostics
+# ------------------------------------------------------------------
+
+def compute_ece(
+    probs: np.ndarray, labels: np.ndarray, n_bins: int = 15,
+) -> float:
+    """Expected Calibration Error (Guo et al., ICML 2017).
+
+    Splits the predicted-confidence axis into ``n_bins`` equal-width bins
+    and returns the weighted average of |accuracy − confidence| per bin.
+    Lower is better; 0 means perfect calibration.
+
+    Args:
+        probs:  (N, C) softmax probabilities
+        labels: (N,) integer ground-truth labels
+        n_bins: number of confidence bins (default 15, per the paper)
+
+    Returns:
+        ece: scalar in [0, 1]
+    """
+    if probs.ndim != 2:
+        raise ValueError(f"probs must be (N, C), got shape {probs.shape}")
+    confidences = probs.max(axis=1)
+    predictions = probs.argmax(axis=1)
+    accuracies = (predictions == labels).astype(np.float64)
+
+    bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+    ece = 0.0
+    N = len(labels)
+    for lo, hi in zip(bin_edges[:-1], bin_edges[1:]):
+        # Last bin is closed on both sides so confidence == 1.0 is counted
+        if hi == 1.0:
+            in_bin = (confidences >= lo) & (confidences <= hi)
+        else:
+            in_bin = (confidences >= lo) & (confidences < hi)
+        n_in = int(in_bin.sum())
+        if n_in == 0:
+            continue
+        bin_acc = float(accuracies[in_bin].mean())
+        bin_conf = float(confidences[in_bin].mean())
+        ece += (n_in / N) * abs(bin_acc - bin_conf)
+    return float(ece)
+
+
+def compute_brier(probs: np.ndarray, labels: np.ndarray) -> float:
+    """Multi-class Brier score (mean squared error on one-hot targets).
+
+    Brier = (1/N) · Σ_i Σ_k (p_ik − y_ik)^2
+
+    Lower is better; bounded in [0, 2] for categorical outcomes.
+
+    Args:
+        probs:  (N, C) softmax probabilities
+        labels: (N,) integer ground-truth labels
+
+    Returns:
+        brier: scalar
+    """
+    N, C = probs.shape
+    onehot = np.zeros((N, C), dtype=np.float64)
+    onehot[np.arange(N), labels] = 1.0
+    return float(((probs - onehot) ** 2).sum(axis=1).mean())

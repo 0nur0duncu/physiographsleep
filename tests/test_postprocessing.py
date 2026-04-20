@@ -6,6 +6,9 @@ import pytest
 from physiographsleep.evaluation.postprocessing import (
     HMMPostProcessor,
     LogitBiasOptimizer,
+    TemperatureScaling,
+    compute_ece,
+    compute_brier,
 )
 
 
@@ -113,6 +116,82 @@ def test_logit_bias_improves_macro_f1():
     assert new_mf1 >= base_mf1 - 1e-6, (
         f"Logit bias regressed: {base_mf1:.4f} -> {new_mf1:.4f}"
     )
+
+
+def _overconfident_logits(rng, n=400, c=5, scale=4.0, err_rate=0.2):
+    """Build overconfident logits: labels are ~80% correct but the argmax
+    is pushed to ~0.99 confidence via large logit scale."""
+    labels = rng.integers(0, c, size=n)
+    logits = rng.normal(0, 0.1, size=(n, c))
+    # Pick argmax per row: correct with prob (1 - err_rate)
+    picks = labels.copy()
+    flips = rng.random(n) < err_rate
+    # Flip to a different random class
+    picks[flips] = (labels[flips] + rng.integers(1, c, size=flips.sum())) % c
+    logits[np.arange(n), picks] += scale
+    return logits.astype(np.float64), labels.astype(np.int64)
+
+
+def test_temperature_preserves_argmax():
+    rng = np.random.default_rng(3)
+    logits, labels = _overconfident_logits(rng)
+    ts = TemperatureScaling().fit(logits, labels)
+    scaled = ts.apply(logits)
+    # Division by positive T cannot change argmax
+    assert (scaled.argmax(1) == logits.argmax(1)).all()
+    assert ts.T > 0.0
+
+
+def test_temperature_reduces_nll_on_overconfident_logits():
+    rng = np.random.default_rng(4)
+    logits, labels = _overconfident_logits(rng, err_rate=0.25)
+    ts = TemperatureScaling().fit(logits, labels)
+    # Overconfident model → T should push >1 and NLL should drop
+    assert ts.T > 1.0, f"Expected T > 1 for overconfident logits, got T={ts.T}"
+    assert ts.nll_after <= ts.nll_before + 1e-6
+
+
+def test_temperature_identity_on_calibrated_logits():
+    """If logits are already near-calibrated (small magnitude), T ≈ 1."""
+    rng = np.random.default_rng(5)
+    n, c = 500, 5
+    labels = rng.integers(0, c, size=n)
+    logits = rng.normal(0, 0.5, size=(n, c))
+    # Give a small correct-class bias so labels are learnable at all
+    logits[np.arange(n), labels] += 0.3
+    ts = TemperatureScaling().fit(logits.astype(np.float64), labels.astype(np.int64))
+    assert 0.5 < ts.T < 2.0, f"Expected T near 1.0, got {ts.T}"
+
+
+def test_ece_bounds_and_perfect_case():
+    rng = np.random.default_rng(6)
+    n, c = 200, 5
+    labels = rng.integers(0, c, size=n)
+    # Perfect one-hot correct predictions → ECE = 0
+    perfect = np.full((n, c), 1e-9)
+    perfect[np.arange(n), labels] = 1.0 - (c - 1) * 1e-9
+    ece = compute_ece(perfect, labels, n_bins=15)
+    assert ece < 1e-6, f"Perfect predictions should have ECE≈0, got {ece}"
+    # Always-wrong confident predictions → ECE large (close to confidence - 0)
+    wrong = np.full((n, c), 1e-9)
+    wrong_idx = (labels + 1) % c
+    wrong[np.arange(n), wrong_idx] = 1.0 - (c - 1) * 1e-9
+    ece_bad = compute_ece(wrong, labels, n_bins=15)
+    assert ece_bad > 0.9
+
+
+def test_brier_bounds_and_perfect_case():
+    rng = np.random.default_rng(7)
+    n, c = 200, 5
+    labels = rng.integers(0, c, size=n)
+    perfect = np.full((n, c), 1e-9)
+    perfect[np.arange(n), labels] = 1.0 - (c - 1) * 1e-9
+    brier = compute_brier(perfect, labels)
+    assert brier < 1e-6
+    # Uniform predictions on 5 classes: Brier = (4/5)^2 + 4*(1/5)^2 = 0.64 + 0.16 = 0.8
+    uniform = np.full((n, c), 1.0 / c)
+    brier_u = compute_brier(uniform, labels)
+    np.testing.assert_allclose(brier_u, 0.8, atol=1e-6)
 
 
 if __name__ == "__main__":
