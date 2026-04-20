@@ -96,11 +96,21 @@ class FusionConfig:
 
 @dataclass
 class SequenceDecoderConfig:
-    """Sequence Transition Decoder — BiGRU + Transition Memory."""
+    """Sequence Transition Decoder — BiGRU + Transition Memory.
+
+    gru_layers=1 (April 2026): reduced from 2 after Sleep-EDF-20 runs
+    showed val MF1 ceiling ~0.775 regardless of graph changes, while
+    train MF1 climbed to 0.88 (10 pp gap). BiGRU probe contribution was
+    +7.8 pp (dominant) and decoder held 424K of 710K params — so the
+    overfit driver was here, not in the GNN. Single-layer BiGRU matches
+    DeepSleepNet / AttnSleep practice and halves the sequence-level
+    subject-memorization capacity without losing the transition cues
+    TCN + TransitionMemory recover. Change is channel-agnostic.
+    """
 
     input_dim: int = 128
     gru_hidden: int = 80
-    gru_layers: int = 2
+    gru_layers: int = 1
     gru_dropout: float = 0.3
     tcn_kernel: int = 3
     num_prototypes: int = 5  # one per sleep stage
