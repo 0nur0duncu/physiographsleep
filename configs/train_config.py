@@ -140,13 +140,13 @@ class TrainConfig:
     # caused F1_N1 oscillation). 1.3 is a mild reinforcement that keeps
     # N1 presence without drowning the batch in N1-like patterns.
     n1_boost: float = 1.3
-    # Patience 5: reduced from 10 (April 2026). p1_f1_m1_waf1 showed
-    # val MF1 peaked at epoch 11 (0.7871) and stayed flat-to-down
-    # through epoch 21 while train loss kept dropping (0.79 → 0.19).
-    # Temperature scaling confirmed over-fit, not calibration drift.
-    # patience=5 stops within ~2-3 epochs of plateau onset. Increase
-    # to 10 if you see an early false-plateau cycle.
-    patience: int = 5
+    # Patience 3: reduced from 5 (April 2026 step 2). p0_f0_m1_waf1
+    # with self-loop GNN fix showed val MF1 peaking at epoch 4 (0.7759)
+    # then plateau-to-drift while train MF1 kept climbing (0.85 → 0.88).
+    # Val loss rose monotonically from epoch 3. Earlier stop captures
+    # peak checkpoint before overfit widens; EMA smooths the selection.
+    # Revert to 5 only if early false-plateau cycles appear.
+    patience: int = 3
     # Exponential Moving Average of model weights. SleepTransformer /
     # XSleepNet standard: stabilises val metrics + adds ~0.01-0.02 MF1.
     ema_decay: float = 0.999
