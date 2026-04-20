@@ -11,7 +11,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-NUM_EDGE_TYPES = 4
+NUM_EDGE_TYPES = 5  # 0=patch-patch, 1=band-band, 2=patch-band,
+                    # 3=summary↔all, 4=self-loop (added April 2026)
 
 
 class EdgeAwareAttention(nn.Module):

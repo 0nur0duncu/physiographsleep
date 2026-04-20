@@ -28,6 +28,8 @@ EDGE_PATCH_PATCH = 0
 EDGE_BAND_BAND = 1
 EDGE_PATCH_BAND = 2
 EDGE_SUMMARY = 3
+EDGE_SELF = 4  # self-loop — each node attends to its own value (fixes
+               # missing self-attention term; April 2026 diagnosis)
 
 
 def build_edge_index() -> tuple[torch.Tensor, torch.Tensor]:
@@ -70,6 +72,16 @@ def build_edge_index() -> tuple[torch.Tensor, torch.Tensor]:
         sources.extend([SUMMARY_OFFSET, i])
         targets.extend([i, SUMMARY_OFFSET])
         types.extend([EDGE_SUMMARY, EDGE_SUMMARY])
+
+    # 5. Self-loops — every node attends to itself (standard GAT/Transformer
+    # practice; without this the attention aggregation excludes the node's
+    # own value and relies purely on the residual connection to propagate
+    # self-information). Preserved through pathway masking unconditionally
+    # (see hetero_graph.py).
+    for i in range(NUM_NODES):
+        sources.append(i)
+        targets.append(i)
+        types.append(EDGE_SELF)
 
     edge_index = torch.tensor([sources, targets], dtype=torch.long)
     edge_type = torch.tensor(types, dtype=torch.long)

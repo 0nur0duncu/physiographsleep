@@ -18,7 +18,7 @@ from .layers import GraphTransformerBlock
 from ..data.graph_builder import (
     NUM_NODES, SUMMARY_OFFSET, PATCH_OFFSET, BAND_OFFSET,
     NUM_PATCH, NUM_BAND, batch_epoch_graphs,
-    STATIC_EDGE_TYPE,
+    STATIC_EDGE_TYPE, EDGE_SELF,
 )
 
 
@@ -110,6 +110,14 @@ class HeteroGraphEncoder(nn.Module):
                 else:
                     allowed_t = torch.tensor(list(allowed), dtype=torch.long)
                     mask = torch.isin(STATIC_EDGE_TYPE, allowed_t)
+                    # Self-loops (EDGE_SELF) are ALWAYS preserved regardless
+                    # of pathway specification — they implement the standard
+                    # self-attention term that every Transformer/GAT layer
+                    # requires for the node to include its own value in the
+                    # aggregation. Without this, masking out edge types
+                    # that don't include 4 would strip self-attention entirely.
+                    self_mask = (STATIC_EDGE_TYPE == EDGE_SELF)
+                    mask = mask | self_mask
                 self.register_buffer(
                     f"_edge_mask_l{li}",
                     mask if mask is not None else torch.empty(0, dtype=torch.bool),

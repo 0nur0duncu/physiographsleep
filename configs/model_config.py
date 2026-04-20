@@ -42,17 +42,20 @@ class HeteroGraphConfig:
       0 = patch↔patch (homo)   1 = band↔band (homo)
       2 = patch↔band (hetero)  3 = summary↔all
 
-    Default 2-layer pathway (shrunk from 3, April 2026):
-        hetero-only → all-edges-with-summary
-    At 20-subject Sleep-EDF scale the GNN probe showed **negative**
-    discriminative contribution with 3 layers (raw_concat→graph −0.24 pp,
-    p0_f0_m1_waf1). Shrinking to 2 layers (−75K params, ~−10% model)
-    preserves the scGraPhT §III-D hetero-then-fused pathway novelty
-    while reducing capacity to match the effective IID subject count.
+    Default 2-layer, no pathway restriction (April 2026):
+        both layers see all edge types (patch-patch, band-band, patch-band,
+        summary, self-loop).
+    Previously used [(2,), (0, 1, 2, 3)] — restricted layer 1 to hetero-only
+    edges. At 2-layer depth this starves patch-patch temporal and band-band
+    spectral coupling in layer 1 with no chance to recover. Removing the
+    restriction lets attention allocate capacity itself.
+    GNN-specific bug fixed simultaneously: self-loops (EDGE_SELF=4) are now
+    part of the static edge index so each node includes its own value in
+    attention (was previously missing — see data/graph_builder.py).
     Change is channel-agnostic (1ch/2ch identical GNN — tokens flow from
     WaveformStem / SpectralEncoder which handle channel count upstream).
-    Set `edge_pathways=None` to use all edge types in every layer
-    (only used by the ablation runner).
+    Set `edge_pathways` explicitly (e.g. scGraPhT 3-layer pathway) only for
+    ablation comparisons; self-loops are always preserved regardless.
     """
 
     node_dim: int = 96
@@ -67,9 +70,7 @@ class HeteroGraphConfig:
     num_patch_nodes: int = 6
     num_band_nodes: int = 5
     num_summary_nodes: int = 1
-    edge_pathways: list[tuple[int, ...]] | None = field(
-        default_factory=lambda: [(2,), (0, 1, 2, 3)]
-    )
+    edge_pathways: list[tuple[int, ...]] | None = None
 
 
 @dataclass
