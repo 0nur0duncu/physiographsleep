@@ -42,8 +42,15 @@ class HeteroGraphConfig:
       0 = patch↔patch (homo)   1 = band↔band (homo)
       2 = patch↔band (hetero)  3 = summary↔all
 
-    Default 3-layer scGraPhT pathway:
-        hetero-only → homo-only → all-edges-with-summary
+    Default 2-layer pathway (shrunk from 3, April 2026):
+        hetero-only → all-edges-with-summary
+    At 20-subject Sleep-EDF scale the GNN probe showed **negative**
+    discriminative contribution with 3 layers (raw_concat→graph −0.24 pp,
+    p0_f0_m1_waf1). Shrinking to 2 layers (−75K params, ~−10% model)
+    preserves the scGraPhT §III-D hetero-then-fused pathway novelty
+    while reducing capacity to match the effective IID subject count.
+    Change is channel-agnostic (1ch/2ch identical GNN — tokens flow from
+    WaveformStem / SpectralEncoder which handle channel count upstream).
     Set `edge_pathways=None` to use all edge types in every layer
     (only used by the ablation runner).
     """
@@ -52,16 +59,16 @@ class HeteroGraphConfig:
     hidden_dim: int = 96
     out_dim: int = 128
     num_heads: int = 6
-    num_layers: int = 3
+    num_layers: int = 2
     dropout: float = 0.2
     # drop_path 0.1: validated default. 0.2 was tested April 2026 and
-    # killed F1_N1 (signal too sparse through 3 graph layers).
+    # killed F1_N1 (signal too sparse through graph layers).
     drop_path: float = 0.1
     num_patch_nodes: int = 6
     num_band_nodes: int = 5
     num_summary_nodes: int = 1
     edge_pathways: list[tuple[int, ...]] | None = field(
-        default_factory=lambda: [(2,), (0, 1), (0, 1, 2, 3)]
+        default_factory=lambda: [(2,), (0, 1, 2, 3)]
     )
 
 
