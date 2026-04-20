@@ -65,7 +65,7 @@ class LossConfig:
     # eder → cross-entropy bileşeni bunu cezalandırır.
     # Best-checkpoint MF1 ile seçildiğinden (loss değil) pratik sorun yok.
     # ls=0.05 ileride bir ablation olarak test edilebilir.
-    label_smoothing: float = 0.0
+    label_smoothing: float = 0.05
 
     # --- Class weight strategy ---
     # "none"         : No class weights on focal loss (current default).
