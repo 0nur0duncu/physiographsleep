@@ -8,10 +8,13 @@ class OptimizerConfig:
     """AdamW optimizer settings."""
 
     lr: float = 1e-3
-    # weight_decay 2e-2: sweet spot validated across multiple Sleep-EDF-20
-    # runs (val MF1 ≈ 0.78). 5e-2 was tested April 2026 and caused a
-    # 6-point regression — model under-fits with that much L2.
-    weight_decay: float = 2e-2
+    # weight_decay 4e-2: increased from 2e-2 (April 2026) after
+    # p1_f1_m1_waf1 showed 17.4 pp train-val MF1 generalization gap
+    # (train 0.9541 / val 0.7801) + fitted T=1.087 via temperature
+    # scaling — calibration was fine, divergence was true overfit.
+    # 5e-2 previously caused a 6-point regression (under-fit); 4e-2
+    # is the midpoint. Revert to 2e-2 if val MF1 drops >0.5 pp.
+    weight_decay: float = 4e-2
     betas: tuple[float, float] = (0.9, 0.999)
     # grad_clip=5.0 matches AttnSleep/SleepTransformer; 1.0 was too
     # aggressive under AdamW + bfloat16 AMP (suppresses legitimate
@@ -137,12 +140,13 @@ class TrainConfig:
     # caused F1_N1 oscillation). 1.3 is a mild reinforcement that keeps
     # N1 presence without drowning the batch in N1-like patterns.
     n1_boost: float = 1.3
-    # Patience 10: with 3-epoch warmup and 30-epoch cosine, plateau
-    # reliably triggers by epoch 13-17 (ΔMF1 < 0.005). patience=15 was
-    # too cheap — allowed 5 extra epochs of noise at the tail of the
-    # cosine schedule with no gain. 10 stops within ~3-5 epochs of
-    # plateau onset, preserving best.pt.
-    patience: int = 10
+    # Patience 5: reduced from 10 (April 2026). p1_f1_m1_waf1 showed
+    # val MF1 peaked at epoch 11 (0.7871) and stayed flat-to-down
+    # through epoch 21 while train loss kept dropping (0.79 → 0.19).
+    # Temperature scaling confirmed over-fit, not calibration drift.
+    # patience=5 stops within ~2-3 epochs of plateau onset. Increase
+    # to 10 if you see an early false-plateau cycle.
+    patience: int = 5
     # Exponential Moving Average of model weights. SleepTransformer /
     # XSleepNet standard: stabilises val metrics + adds ~0.01-0.02 MF1.
     ema_decay: float = 0.999
