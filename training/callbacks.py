@@ -11,7 +11,7 @@ from ..utils.io_utils import save_checkpoint
 class EarlyStopping:
     """Stop training when monitored metric stops improving."""
 
-    def __init__(self, patience: int = 10, mode: str = "max", min_delta: float = 1e-4):
+    def __init__(self, patience: int = 10, mode: str = "max", min_delta: float = 1e-3):
         self.patience = patience
         self.mode = mode
         self.min_delta = min_delta
