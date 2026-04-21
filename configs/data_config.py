@@ -51,11 +51,17 @@ class DataConfig:
     # Set to 0 to disable. Standard value = 30 minutes.
     wake_trim_minutes: int = 30
 
-    # Augmentation
+    # Augmentation (Strategy 2a — April 2026)
+    # Baseline was gaussian_noise_std=0.01, amplitude_scale_range=(0.9, 1.1).
+    # Too mild for 20-subject Sleep-EDF (val MF1 ceiled at 0.787 while
+    # train climbed to 0.88). Subject-domain gap dominates; stronger
+    # per-epoch perturbations should regularize without semantic damage.
+    # Per-channel independent perturbation preserves 1ch/2ch parity.
+    # Revert to 0.01 / (0.9, 1.1) if val MF1 drops > 0.5 pp.
     use_augmentation: bool = True
-    gaussian_noise_std: float = 0.01
-    time_shift_max: int = 50  # samples
-    amplitude_scale_range: tuple[float, float] = (0.9, 1.1)
+    gaussian_noise_std: float = 0.03
+    time_shift_max: int = 50  # samples (unchanged — already ±50 / 3000 ≈ 1.6%)
+    amplitude_scale_range: tuple[float, float] = (0.8, 1.2)
 
     # Loading
     batch_size: int = 32
