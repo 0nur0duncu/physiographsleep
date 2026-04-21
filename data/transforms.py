@@ -16,6 +16,7 @@ class SleepTransforms:
         self.noise_std = config.gaussian_noise_std
         self.shift_max = config.time_shift_max
         self.scale_range = config.amplitude_scale_range
+        self.dc_shift_std = config.dc_shift_std
         self.enabled = config.use_augmentation
 
     def transform_sequence(self, seq: np.ndarray) -> np.ndarray:
@@ -32,7 +33,21 @@ class SleepTransforms:
 
         seq = seq.copy()
         L = seq.shape[0]
+        C = seq.shape[1]
         T = seq.shape[-1]
+
+        # Subject-level DC shift — one constant per (sequence, channel),
+        # same across all L epochs. Simulates amplifier baseline drift /
+        # electrode impedance offset that differ between subjects.
+        # Applied with p=0.8 because subject-domain bias is the dominant
+        # overfit source at Sleep-EDF-20 scale (20 subjects → any DC cue
+        # can leak subject identity). 2ch-aware: each channel gets its
+        # own independent shift.
+        if self.dc_shift_std > 0 and np.random.random() < 0.8:
+            dc = np.random.normal(
+                0.0, self.dc_shift_std, size=(1, C, 1),
+            ).astype(seq.dtype)
+            seq += dc
 
         # Gaussian noise — independent per epoch
         noise_mask = np.random.random(L) < 0.5

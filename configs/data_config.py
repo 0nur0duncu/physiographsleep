@@ -62,6 +62,14 @@ class DataConfig:
     gaussian_noise_std: float = 0.03
     time_shift_max: int = 50  # samples (unchanged — already ±50 / 3000 ≈ 1.6%)
     amplitude_scale_range: tuple[float, float] = (0.8, 1.2)
+    # Subject-level DC shift (Strategy 2b — April 2026). One constant
+    # offset per (sequence, channel) shared across all L epochs in the
+    # sequence. Simulates amplifier baseline / electrode impedance drift
+    # that varies between subjects. σ=0.1 relative to z-scored signal
+    # (signal σ ≈ 1) is ~10% of dynamic range — strong enough to break
+    # DC-based subject identification, small enough to preserve semantic
+    # content. Set to 0.0 to disable.
+    dc_shift_std: float = 0.1
 
     # Loading
     batch_size: int = 32
