@@ -16,15 +16,14 @@ class OptimizerConfig:
     # at a value the regulariser stack (dropout, prototype_noise,
     # wd=8e-2, focal+ls) can still shape.
     lr: float = 3e-4
-    # weight_decay 4e-2: increased from 2e-2 (April 2026) after
-    # p1_f1_m1_waf1 showed 17.4 pp train-val MF1 generalization gap
-    # (train 0.9541 / val 0.7801) + fitted T=1.087 via temperature
-    # scaling — calibration was fine, divergence was true overfit.
-    # 5e-2 previously caused a 6-point regression (under-fit); 4e-2
-    # is the midpoint. Revert to 2e-2 if val MF1 drops >0.5 pp.
-    # April 2026 overfit rerun: raised 4e-2 -> 8e-2 together with
-    # decoder dropout 0.3/0.5 + prototype noise + aux-loss cut.
-    weight_decay: float = 8e-2
+    # weight_decay 4e-2 (April 22 2026): back down from 8e-2. With
+    # lr=3e-4 + warmup=10 the effective step-wise regularisation is
+    # already much softer than the previous 1e-3 peak. 8e-2 together
+    # with the lower LR was over-regularising: train loss components
+    # were still dropping while val loss floored (ls=0.05 + focal γ=2
+    # floor). 4e-2 lets the encoder refine representations in the
+    # cosine decay tail without the heavy wd pulling weights back.
+    weight_decay: float = 4e-2
     betas: tuple[float, float] = (0.9, 0.999)
     # grad_clip=5.0 matches AttnSleep/SleepTransformer; 1.0 was too
     # aggressive under AdamW + bfloat16 AMP (suppresses legitimate
@@ -66,16 +65,20 @@ class LossConfig:
     """Multi-task loss weights and focal loss settings."""
 
     stage_weight: float = 1.0
-    # Auxiliary head weights lowered April 2026 after overfit audit:
-    # boundary/prev/next heads are random-init and their gradients
-    # flow back into the shared encoder, consuming encoder capacity
-    # on near-random targets and contributing to the 17 pp train/val
-    # MF1 gap. Keeping them non-zero preserves the regularization
-    # signal (boundary saliency, adjacency consistency) without the
-    # previous 45 % of the loss budget going to auxiliary tasks.
-    boundary_weight: float = 0.10
-    prev_stage_weight: float = 0.05
-    next_stage_weight: float = 0.05
+    # April 22 2026 — AUX HEAD SURGERY. Live run (WandB a8yl5e0v)
+    # diagnostics showed prev/next head losses frozen at 0.70-0.78 for
+    # 18 consecutive epochs while their weighted contribution (0.035
+    # each) still accounted for 22 % of the total loss budget. The
+    # heads hit the label_smoothing floor and were back-propagating
+    # pure constant noise into the shared encoder — classic
+    # auxiliary-task saturation. Boundary head followed the same
+    # pattern (0.368 → 0.368). Setting prev/next to 0 removes the
+    # dead gradient entirely; boundary kept at 0.05 because the
+    # transition-memory block already encodes transitions and the
+    # direct binary signal is still informative for N1 disambiguation.
+    boundary_weight: float = 0.05
+    prev_stage_weight: float = 0.0
+    next_stage_weight: float = 0.0
     n1_aux_weight: float = 0.30
     # GNN branch deep-supervision weight (only active when fusion is ON).
     # Without this, detach_gnn_for_lambda=True cuts all stage-loss gradient
@@ -90,9 +93,15 @@ class LossConfig:
     # eder → cross-entropy bileşeni bunu cezalandırır.
     # Best-checkpoint MF1 ile seçildiğinden (loss değil) pratik sorun yok.
     # ls=0.05 ileride bir ablation olarak test edilebilir.
-    # April 2026: overfit audit raised ls 0.05 -> 0.10 to blunt the
-    # overconfident logits that drive train MF1 towards 0.97.
-    label_smoothing: float = 0.10
+    # April 22 2026: ls 0.10 -> 0.05. Live run showed val loss
+    # locked at 0.55 from epoch 2 onwards — mathematically this was
+    # the ls=0.10 floor for a 5-class focal loss (~0.365) plus the
+    # frozen aux components. Val loss ceased to be a training signal
+    # and became a calibration floor. Reducing ls to 0.05 halves the
+    # floor and restores monotonic val-loss visibility; focal γ=2
+    # already prevents over-confident logits without the full 0.10
+    # smoothing.
+    label_smoothing: float = 0.05
 
     # --- Class weight strategy ---
     # "none"         : No class weights on focal loss (current default).
@@ -111,7 +120,14 @@ class LossConfig:
     # weights are safe to engage early — warmup=2 gives the EMA a
     # first checkpoint, then lets the minority boost kick in.
     adaptive_warmup: int = 2    # epochs with uniform weights before adapting
-    adaptive_K: float = 10.0    # coefficient for weight formula
+    # adaptive_K 20.0 (April 22 2026): up from 10.0. Live run showed
+    # N1 weight hovering at 1.68-1.85 for 18 epochs while N1 F1 was
+    # stuck at 0.48-0.53 — too weak to break the minority plateau.
+    # At K=20 the same F1=0.50 now yields weight 1 + 20*0.125 = 3.5
+    # (vs 2.25 before), giving the minority class a real push without
+    # destabilising the easy classes (their weights stay ~1.0 since
+    # (1-F1)^3 is tiny for F1≥0.85).
+    adaptive_K: float = 20.0    # coefficient for weight formula
     adaptive_gamma: float = 3.0  # exponent for weight formula
 
     # Class-balanced effective number (Cui et al. CVPR 2019)
