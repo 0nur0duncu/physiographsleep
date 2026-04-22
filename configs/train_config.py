@@ -117,7 +117,18 @@ class LossConfig:
     # val-source fix (trainer uses val per_class_f1, not train) the
     # weights are safe to engage early — warmup=2 gives the EMA a
     # first checkpoint, then lets the minority boost kick in.
-    adaptive_warmup: int = 2    # epochs with uniform weights before adapting
+    # adaptive_warmup 10 (April 22 2026 — third revision): raised from
+    # 2 to match LR warmup. Live run qfnfnmjl showed a sharp gnorm
+    # spike at epochs 3-4 (5.7 -> 10.7 -> 11.7) and val loss jump
+    # (0.55 -> 0.86 -> 0.92) exactly when adaptive reweighting kicked
+    # in at epoch 2 with N1 weight 2.74 -> 3.01 WHILE LR was still in
+    # warmup (6e-5 -> 9e-5, only 20 % of peak 3e-4). Applying 3x class
+    # weight shift during low-LR warmup moves the loss landscape faster
+    # than the optimiser can follow, causing gradient explosion and
+    # transient divergence. Delaying adaptive reweighting until the LR
+    # has reached peak gives the optimiser the step size it needs to
+    # track the new minority-class gradient surface smoothly.
+    adaptive_warmup: int = 10   # epochs with uniform weights before adapting
     # adaptive_K 10.0 (April 22 2026 — second revision): lowered from
     # 20.0. The original K=20 choice was compensating for the mean
     # normalisation in compute_adaptive_f1_weights which divided every
