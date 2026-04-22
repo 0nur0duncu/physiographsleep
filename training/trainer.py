@@ -97,6 +97,9 @@ class Trainer:
             device.type == "cuda" and torch.cuda.is_bf16_supported()
         ) else torch.float16
         self.use_scaler = self.amp_enabled and self.amp_dtype == torch.float16
+        # EMA-smoothed adaptive F1 class weight vector. None until the
+        # first post-warmup adaptive update occurs.
+        self._adaptive_ema: np.ndarray | None = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -137,6 +140,19 @@ class Trainer:
             # while Val MF1 stuck around 0.77. Weights must reflect val
             # generalisation, not memorised train distribution. The new
             # weights take effect on the *next* epoch's loss computation.
+            #
+            # EMA smoothing (April 22 2026 — 4th revision): run 8gfm5yzo
+            # reproduced the step-transition shock (val loss 0.48 -> 0.65
+            # in one epoch) the moment adaptive_warmup ended and the
+            # weight vector jumped from uniform [1,1,1,1,1] to e.g.
+            # [1.03, 2.26, 1.04, 1.02, 1.11]. A 2.26x gradient multiplier
+            # appearing in a single step collapses training regardless of
+            # LR. The fix is to EMA the raw target weights with decay
+            # 0.7 so the effective weight vector ramps in over ~4-5
+            # epochs: epoch 10 -> ~1.38 N1 weight, epoch 11 -> ~1.66,
+            # epoch 14 -> ~2.15. Optimiser trajectory now tracks the
+            # slowly moving loss landscape instead of fighting a step
+            # discontinuity.
             loss_cfg = self.config.loss
             adaptive_weights_np: np.ndarray | None = None
             if (
@@ -144,17 +160,27 @@ class Trainer:
                 and epoch >= loss_cfg.adaptive_warmup
                 and val_metrics.get("per_class_f1")
             ):
-                adaptive_weights_np = compute_adaptive_f1_weights(
+                target_weights = compute_adaptive_f1_weights(
                     np.array(val_metrics["per_class_f1"]),
                     K=loss_cfg.adaptive_K,
                     gamma=loss_cfg.adaptive_gamma,
                 )
+                if self._adaptive_ema is None:
+                    # First adaptive step: start from uniform and take a
+                    # small step toward the target, not a full jump.
+                    self._adaptive_ema = np.ones_like(target_weights)
+                decay = loss_cfg.adaptive_ema_decay
+                self._adaptive_ema = (
+                    decay * self._adaptive_ema + (1.0 - decay) * target_weights
+                ).astype(np.float32)
+                adaptive_weights_np = self._adaptive_ema
                 self.loss_fn.update_focal_weights(
                     torch.from_numpy(adaptive_weights_np).float()
                 )
                 logger.info(
                     f"  Adaptive F1 (val) weights: "
-                    f"{np.array2string(adaptive_weights_np, precision=2)}"
+                    f"{np.array2string(adaptive_weights_np, precision=2)} "
+                    f"(target={np.array2string(target_weights, precision=2)})"
                 )
 
             # Snapshot current focal class weights (either just-updated

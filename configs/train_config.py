@@ -117,18 +117,24 @@ class LossConfig:
     # val-source fix (trainer uses val per_class_f1, not train) the
     # weights are safe to engage early — warmup=2 gives the EMA a
     # first checkpoint, then lets the minority boost kick in.
-    # adaptive_warmup 10 (April 22 2026 — third revision): raised from
-    # 2 to match LR warmup. Live run qfnfnmjl showed a sharp gnorm
-    # spike at epochs 3-4 (5.7 -> 10.7 -> 11.7) and val loss jump
-    # (0.55 -> 0.86 -> 0.92) exactly when adaptive reweighting kicked
-    # in at epoch 2 with N1 weight 2.74 -> 3.01 WHILE LR was still in
-    # warmup (6e-5 -> 9e-5, only 20 % of peak 3e-4). Applying 3x class
-    # weight shift during low-LR warmup moves the loss landscape faster
-    # than the optimiser can follow, causing gradient explosion and
-    # transient divergence. Delaying adaptive reweighting until the LR
-    # has reached peak gives the optimiser the step size it needs to
-    # track the new minority-class gradient surface smoothly.
-    adaptive_warmup: int = 10   # epochs with uniform weights before adapting
+    # adaptive_warmup 3 (April 22 2026 — fourth revision): with EMA
+    # smoothing now applied to the weight vector (decay=0.7), the hard
+    # step-transition that previously required postponing activation
+    # is gone. 3 epochs of uniform weights is enough to let LR warmup
+    # stabilise gradient statistics before reweighting starts to ramp
+    # in slowly.
+    adaptive_warmup: int = 3    # epochs with uniform weights before adapting
+    # adaptive_ema_decay 0.7: new weights = 0.7 * old + 0.3 * target.
+    # A 2.26x target weight is reached in ~5 epochs instead of 1:
+    #   e=1: 1.0  -> 0.7*1.0  + 0.3*2.26 = 1.38
+    #   e=2: 1.38 -> 0.7*1.38 + 0.3*2.26 = 1.64
+    #   e=3: 1.64 -> 0.7*1.64 + 0.3*2.26 = 1.83
+    #   e=4:                              = 1.96
+    #   e=5:                              = 2.05
+    # Optimiser sees a slowly moving loss landscape; no step shock.
+    adaptive_ema_decay: float = 0.7
+    adaptive_K: float = 10.0    # coefficient for weight formula
+    adaptive_gamma: float = 3.0  # exponent for weight formula
     # adaptive_K 10.0 (April 22 2026 — second revision): lowered from
     # 20.0. The original K=20 choice was compensating for the mean
     # normalisation in compute_adaptive_f1_weights which divided every
@@ -140,8 +146,6 @@ class LossConfig:
     # F1=0.43 gets w=3.7x, W/N2 at F1=0.79 get w=1.2x, N3 at F1=0.86
     # gets w=1.05x. Every class keeps at least a full gradient while
     # the minority receives a genuine ~4x boost — no silent damping.
-    adaptive_K: float = 10.0    # coefficient for weight formula
-    adaptive_gamma: float = 3.0  # exponent for weight formula
 
     # Class-balanced effective number (Cui et al. CVPR 2019)
     cb_beta: float = 0.9999     # β ∈ {0.9, 0.99, 0.999, 0.9999}
