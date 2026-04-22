@@ -36,7 +36,13 @@ from .scheduler import build_scheduler
 from ..utils.io_utils import load_checkpoint
 
 logger = logging.getLogger("physiographsleep.trainer")
-logger.propagate = False  # avoid duplicate logs in jupyter/colab
+# Propagate to the parent "physiographsleep" logger where `setup_logger`
+# attaches console + file handlers. Without propagation this child logger
+# has no handlers of its own and all `logger.info(...)` epoch lines are
+# silently dropped (fold 0/1 headers appeared but training progress did
+# not). Duplicate suppression is handled by `setup_logger`'s
+# `if logger.handlers: return` guard.
+logger.propagate = True
 
 
 class Trainer:
@@ -80,6 +86,13 @@ class Trainer:
         self.callback = callback
         if device.type == "cuda":
             torch.backends.cudnn.benchmark = True
+            # TF32 for FP32 matmul on Ampere+ GPUs (T4, L4, A100, H100).
+            # ~1.5-2x speedup on linear/conv layers with negligible
+            # accuracy impact. `high` = use TF32 (not full FP32) in
+            # matmul; `highest` would force full FP32.
+            torch.set_float32_matmul_precision("high")
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
         self.amp_dtype = torch.bfloat16 if (
             device.type == "cuda" and torch.cuda.is_bf16_supported()
         ) else torch.float16

@@ -91,6 +91,25 @@ def build_edge_index() -> tuple[torch.Tensor, torch.Tensor]:
 # Pre-compute static graph topology (same for every epoch)
 STATIC_EDGE_INDEX, STATIC_EDGE_TYPE = build_edge_index()
 
+# Per-device cache of static tensors. Moving STATIC_EDGE_INDEX.to(device) on
+# every forward is a CPU→GPU copy that `torch.compile` cannot fuse — it
+# splits the cudagraph into 2 partitions and emits
+# "cudagraph partition due to DeviceCopy ops" warnings. Caching one copy
+# per device eliminates the copy and lets the full forward become a single
+# cudagraph.
+_EDGE_CACHE: dict[torch.device, tuple[torch.Tensor, torch.Tensor]] = {}
+
+
+def _get_edges_on(device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+    cached = _EDGE_CACHE.get(device)
+    if cached is None:
+        cached = (
+            STATIC_EDGE_INDEX.to(device, non_blocking=True),
+            STATIC_EDGE_TYPE.to(device, non_blocking=True),
+        )
+        _EDGE_CACHE[device] = cached
+    return cached
+
 
 def batch_epoch_graphs(
     patch_tokens_batch: torch.Tensor,
@@ -112,8 +131,7 @@ def batch_epoch_graphs(
     device = patch_tokens_batch.device
     d = patch_tokens_batch.shape[-1]
 
-    edge_index_base = STATIC_EDGE_INDEX.to(device)
-    edge_type_base = STATIC_EDGE_TYPE.to(device)
+    edge_index_base, edge_type_base = _get_edges_on(device)
     E = edge_index_base.shape[1]
 
     # Vectorized graph batching — no Python loop
