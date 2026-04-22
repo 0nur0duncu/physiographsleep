@@ -118,35 +118,69 @@ class Trainer:
         ema = ModelEMA(self.model, decay=self.config.ema_decay)
 
         for epoch in range(self.config.epochs):
-            train_loss, tr_preds, tr_labels = self._train_one_epoch(
+            train_loss, tr_preds, tr_labels, train_diag = self._train_one_epoch(
                 optimizer, loader, ema=ema,
             )
             train_metrics = self._train_metrics(tr_labels, tr_preds)
-
-            # Adaptive F1-based weight update (SeriesSleepNet, Frontiers 2023)
-            loss_cfg = self.config.loss
-            if (
-                loss_cfg.weight_strategy == "adaptive_f1"
-                and epoch >= loss_cfg.adaptive_warmup
-                and "per_class_f1" in train_metrics
-            ):
-                new_w = compute_adaptive_f1_weights(
-                    np.array(train_metrics["per_class_f1"]),
-                    K=loss_cfg.adaptive_K,
-                    gamma=loss_cfg.adaptive_gamma,
-                )
-                self.loss_fn.update_focal_weights(torch.from_numpy(new_w).float())
-                if epoch == loss_cfg.adaptive_warmup:
-                    logger.info(
-                        f"  Adaptive F1 weights activated (epoch {epoch}): "
-                        f"{np.array2string(new_w, precision=2)}"
-                    )
 
             # Evaluate with EMA weights swapped into the live model.
             with ema.swap_into(self.model):
                 val_loss, val_metrics = self._evaluate_with_loss()
 
-            self._log_epoch(epoch, train_loss, val_loss, val_metrics, train_metrics)
+            # Adaptive F1-based weight update.
+            # CRITICAL FIX (April 2026): previously fed `train_metrics`
+            # per-class F1 into the formula. With a WeightedRandomSampler
+            # boosting N1, train F1 saturates near 0.95+ for every class
+            # within 2-3 epochs, which collapsed the adaptive weights to
+            # ~[1.0,...,1.0] and neutralised the reweighting — the exact
+            # feedback loop that caused Val N1 F1 to plateau at 0.50
+            # while Val MF1 stuck around 0.77. Weights must reflect val
+            # generalisation, not memorised train distribution. The new
+            # weights take effect on the *next* epoch's loss computation.
+            loss_cfg = self.config.loss
+            adaptive_weights_np: np.ndarray | None = None
+            if (
+                loss_cfg.weight_strategy == "adaptive_f1"
+                and epoch >= loss_cfg.adaptive_warmup
+                and val_metrics.get("per_class_f1")
+            ):
+                adaptive_weights_np = compute_adaptive_f1_weights(
+                    np.array(val_metrics["per_class_f1"]),
+                    K=loss_cfg.adaptive_K,
+                    gamma=loss_cfg.adaptive_gamma,
+                )
+                self.loss_fn.update_focal_weights(
+                    torch.from_numpy(adaptive_weights_np).float()
+                )
+                logger.info(
+                    f"  Adaptive F1 (val) weights: "
+                    f"{np.array2string(adaptive_weights_np, precision=2)}"
+                )
+
+            # Snapshot current focal class weights (either just-updated
+            # adaptive weights or whatever the loss holds — e.g. the
+            # inverse-frequency baseline before `adaptive_warmup`).
+            try:
+                current_focal_w = self.loss_fn.focal.weight
+                current_focal_w = (
+                    current_focal_w.detach().cpu().numpy().tolist()
+                    if current_focal_w is not None else None
+                )
+            except AttributeError:
+                current_focal_w = None
+
+            diagnostics = dict(train_diag)
+            diagnostics["lr"] = float(optimizer.param_groups[0]["lr"])
+            diagnostics["focal_class_weights"] = current_focal_w
+            diagnostics["adaptive_weights_updated"] = (
+                adaptive_weights_np.tolist()
+                if adaptive_weights_np is not None else None
+            )
+
+            self._log_epoch(
+                epoch, train_loss, val_loss, val_metrics, train_metrics,
+                diagnostics=diagnostics,
+            )
             scheduler.step()
 
             # Save EMA state (not raw) as the best checkpoint — that is the
@@ -227,12 +261,27 @@ class Trainer:
         optimizer: torch.optim.Optimizer,
         loader: DataLoader,
         ema: ModelEMA | None = None,
-    ) -> tuple[float, np.ndarray, np.ndarray]:
+    ) -> tuple[float, np.ndarray, np.ndarray, dict[str, float]]:
         self.model.train()
         # GPU-accumulated loss avoids one `cudaDeviceSynchronize` per batch
         # (previously `.item()` inside the hot loop was costing ~460 syncs
         # per EDF-20 epoch). We sync once at the end of the epoch instead.
         total_loss_gpu = torch.zeros((), device=self.device)
+        # Per-component loss accumulators (GPU) for diagnostic logging.
+        # Keys mirror the output of MultiTaskLoss.forward: stage, boundary,
+        # prev, next, n1, and optionally stage_gnn when λ-fusion is active.
+        comp_keys = ("stage", "boundary", "prev", "next", "n1", "stage_gnn")
+        comp_gpu: dict[str, torch.Tensor] = {
+            k: torch.zeros((), device=self.device) for k in comp_keys
+        }
+        comp_present: dict[str, bool] = {k: False for k in comp_keys}
+        # Grad-norm tracker: measured AFTER clip_grad_norm_ returns the
+        # pre-clip norm, so this is the TRUE signal magnitude seen by the
+        # optimizer. Spikes → instability; collapse → dead gradients.
+        grad_norm_sum = 0.0
+        grad_norm_n = 0
+        # Mixup activation tracker (how often N1-mixup actually fired).
+        mixup_active_n = 0
         num_batches = 0
         import time as _time
         t0 = _time.time()
@@ -268,6 +317,7 @@ class Trainer:
                     signals = mix_batch["signal"]
                     spectral = mix_batch["spectral"]
                     targets["label_soft"] = mix_info["soft_label"]
+                    mixup_active_n += 1
 
             with autocast("cuda", enabled=self.amp_enabled, dtype=self.amp_dtype):
                 predictions = self.model(signals, spectral, mask)
@@ -277,7 +327,7 @@ class Trainer:
             if self.use_scaler:
                 self.scaler.scale(losses["total"]).backward()
                 self.scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(
+                gnorm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.config.optimizer.grad_clip,
                 )
                 self.scaler.step(optimizer)
@@ -286,7 +336,7 @@ class Trainer:
                     ema.update(self.model)
             else:
                 losses["total"].backward()
-                torch.nn.utils.clip_grad_norm_(
+                gnorm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.config.optimizer.grad_clip,
                 )
                 optimizer.step()
@@ -294,6 +344,19 @@ class Trainer:
                     ema.update(self.model)
 
             total_loss_gpu += losses["total"].detach()
+            # Accumulate per-component losses (unweighted raw values so we
+            # can see whether a specific head is plateauing / diverging
+            # independent of its multi-task weight).
+            for k in comp_keys:
+                if k in losses:
+                    comp_gpu[k] += losses[k].detach()
+                    comp_present[k] = True
+            # clip_grad_norm_ returns the total L2 norm BEFORE clipping.
+            # On NaN/Inf we skip the sample (prevents polluting the mean).
+            gnorm_val = float(gnorm) if torch.isfinite(gnorm) else float("nan")
+            if gnorm_val == gnorm_val:  # not NaN
+                grad_norm_sum += gnorm_val
+                grad_norm_n += 1
             num_batches += 1
             n_samples += signals.shape[0]
             # tqdm postfix updates are rate-limited by tqdm itself; we only
@@ -315,7 +378,24 @@ class Trainer:
             )
         all_preds = torch.cat(gpu_preds).cpu().numpy()
         all_labels = torch.cat(gpu_labels).cpu().numpy()
-        return mean_loss, all_preds, all_labels
+        # Diagnostics: per-component mean loss, grad-norm mean, mixup rate,
+        # throughput. Consumed by `train()` which forwards to the user
+        # callback / WandB alongside the epoch metrics.
+        loss_components = {
+            k: float(comp_gpu[k].item()) / max(num_batches, 1)
+            for k in comp_keys if comp_present[k]
+        }
+        diagnostics = {
+            "loss_components": loss_components,
+            "grad_norm_mean": (
+                grad_norm_sum / grad_norm_n if grad_norm_n > 0 else 0.0
+            ),
+            "mixup_active_rate": mixup_active_n / max(num_batches, 1),
+            "throughput_samples_per_s": (
+                n_samples / elapsed if elapsed > 0 else 0.0
+            ),
+        }
+        return mean_loss, all_preds, all_labels, diagnostics
 
     def _train_metrics(
         self, labels: np.ndarray, preds: np.ndarray,
@@ -407,6 +487,7 @@ class Trainer:
         self, epoch: int, loss: float, val_loss: float,
         metrics: dict[str, float],
         train_metrics: dict[str, float] | None = None,
+        diagnostics: dict[str, Any] | None = None,
     ) -> None:
         train_extra = ""
         if train_metrics is not None:
@@ -422,13 +503,39 @@ class Trainer:
             f"ValMF1={metrics['macro_f1']:.4f} | "
             f"\u03ba={metrics['kappa']:.4f}"
         )
+        # Compact diagnostic line (one per epoch) so the user can spot
+        # loss-component drift / grad explosions without opening WandB.
+        if diagnostics is not None:
+            comp = diagnostics.get("loss_components", {})
+            comp_str = " ".join(
+                f"{k}={v:.3f}" for k, v in comp.items()
+            )
+            logger.info(
+                f"  diag | lr={diagnostics.get('lr', 0):.2e} | "
+                f"gnorm={diagnostics.get('grad_norm_mean', 0):.3f} | "
+                f"mixup={diagnostics.get('mixup_active_rate', 0):.2f} | "
+                f"thru={diagnostics.get('throughput_samples_per_s', 0):.0f}s/s | "
+                f"comp[{comp_str}]"
+            )
         if self.callback is not None:
             try:
                 self.callback(
                     epoch=epoch,
                     train_loss=loss, val_loss=val_loss,
                     train_metrics=train_metrics or {}, val_metrics=metrics,
+                    diagnostics=diagnostics or {},
                 )
+            except TypeError:
+                # Back-compat with callbacks that don't accept diagnostics.
+                try:
+                    self.callback(
+                        epoch=epoch,
+                        train_loss=loss, val_loss=val_loss,
+                        train_metrics=train_metrics or {},
+                        val_metrics=metrics,
+                    )
+                except Exception as exc:  # pragma: no cover
+                    logger.warning(f"Callback failed: {exc}")
             except Exception as exc:  # pragma: no cover
                 logger.warning(f"Callback failed: {exc}")
 

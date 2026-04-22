@@ -55,18 +55,24 @@ def compute_adaptive_f1_weights(
     K: float = 10.0,
     gamma: float = 3.0,
 ) -> np.ndarray:
-    """Adaptive F1-based weights (SeriesSleepNet, Frontiers 2023).
+    """Adaptive F1-based class weights.
 
-    W_i = 1 − log_K(CF_i)^γ
+    Original SeriesSleepNet formula (Frontiers 2023) was
+        W_i = 1 - log_K(CF_i)^gamma
+    which in practice yields nearly uniform weights: for CF=0.50 and
+    (K=10, gamma=3) the weight is only 1.027, i.e. < 3% spread between
+    the worst and the best class. The signal is too weak to break
+    minority-class plateaus.
 
-    Low F1 → high weight, high F1 → weight near 1.  Gradient-safe:
-    CF_i is clamped to [1e-4, 1.0].
+    We instead use
+        W_i = 1.0 + K * (1 - CF_i) ** gamma
+    which is monotone and interpretable: CF=0.50 -> 1 + 10*0.125 = 2.25,
+    CF=0.95 -> 1 + 10*0.000125 = 1.001. Low F1 classes get a meaningful
+    boost, high F1 classes keep weight ~1. Weights are normalised so
+    their mean is 1.0 to preserve overall loss magnitude.
     """
-    f1 = np.clip(per_class_f1, 1e-4, 1.0).astype(np.float64)
-    log_base = math.log(K)
-    log_f1 = np.log(f1) / log_base          # log_K(f1)
-    weights = 1.0 - np.power(log_f1, gamma)  # log_f1 is ≤0, so log_f1^γ ≤0 → 1-neg = ≥1
-    # Normalise to mean=1 so total loss magnitude is stable
+    f1 = np.clip(per_class_f1, 0.0, 1.0).astype(np.float64)
+    weights = 1.0 + K * np.power(1.0 - f1, gamma)
     weights = weights / (weights.mean() + 1e-8)
     return weights.astype(np.float32)
 
@@ -119,10 +125,19 @@ class FocalLoss(nn.Module):
                 targets * (1.0 - self.label_smoothing)
                 + self.label_smoothing / n_classes
             )
-        if self.weight is not None:
-            log_probs = log_probs * self.weight.unsqueeze(0)
         per_sample_ce = -(targets * log_probs).sum(dim=-1)  # (B,)
-        # Focal modulation on the *target-weighted* confidence
+        if self.weight is not None:
+            # PyTorch cross_entropy(weight=w) semantics for hard targets
+            # is loss_i = w[target_i] * CE_i. Its soft-target analogue is
+            # a per-sample weight equal to sum_k target[i,k] * w[k].
+            # Previous implementation scaled log_probs by w across all
+            # classes, which merely shifts the prediction distribution
+            # and does NOT reweight minority classes — a silent bug that
+            # neutralised class weights whenever Mixup was active.
+            w = self.weight.to(log_probs.device)
+            sample_w = (targets * w.unsqueeze(0)).sum(dim=-1)       # (B,)
+            per_sample_ce = per_sample_ce * sample_w
+        # Focal modulation on the target-weighted confidence
         with torch.no_grad():
             probs = log_probs.exp()
             pt = (targets * probs).sum(dim=-1).clamp(min=1e-6, max=1.0)

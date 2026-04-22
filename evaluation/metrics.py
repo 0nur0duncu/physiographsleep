@@ -43,6 +43,11 @@ class MetricsCalculator:
         per_class = f1_score(y_true, y_pred, average=None, zero_division=0, labels=range(5))
         for i, name in enumerate(STAGE_NAMES):
             result[f"f1_{name}"] = per_class[i] if i < len(per_class) else 0.0
+        # List form for consumers (trainer adaptive-F1 reweighting)
+        result["per_class_f1"] = [
+            float(per_class[i]) if i < len(per_class) else 0.0
+            for i in range(len(STAGE_NAMES))
+        ]
 
         return result
 

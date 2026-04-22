@@ -7,7 +7,13 @@ from dataclasses import dataclass, field
 class OptimizerConfig:
     """AdamW optimizer settings."""
 
-    lr: float = 1e-3
+    # lr 5e-4 (April 2026 plateau fix): down from 1e-3 because training
+    # curve (7-epoch rerun) showed train loss 1.44 -> 0.41 while Val MF1
+    # saturated at 0.77 from epoch 1 and Val N1 F1 flat at 0.50. At
+    # 1e-3 with warmup=3 the optimiser hits peak LR in ~1380 steps and
+    # memorises the easy classes before the regulariser stack (focal +
+    # ls=0.10 + wd=8e-2 + decoder dropout 0.3/0.5) can shape gradients.
+    lr: float = 5e-4
     # weight_decay 4e-2: increased from 2e-2 (April 2026) after
     # p1_f1_m1_waf1 showed 17.4 pp train-val MF1 generalization gap
     # (train 0.9541 / val 0.7801) + fitted T=1.087 via temperature
@@ -42,7 +48,12 @@ class SchedulerConfig:
     # cosine tail was 2× wasted compute with no measurable MF1 gain.
     t_max: int = 30
     eta_min: float = 1e-6
-    warmup_epochs: int = 3
+    # warmup 5 (April 2026): up from 3. With lr 1e-3 and warmup 3 the
+    # first 1380 steps hit peak LR, which drove train loss 1.44 -> 0.72
+    # in a single epoch and Val MF1 to saturate immediately. 5 epochs
+    # of linear ramp lets the regulariser stack (dropout, prototype
+    # noise, ls) actually shape the gradient landscape before peak.
+    warmup_epochs: int = 5
 
 
 @dataclass
@@ -87,9 +98,15 @@ class LossConfig:
     #                  uniform weights, then W_i = 1 - log_K(CF_i)^γ_a.
     weight_strategy: str = "none"
 
-    # Adaptive F1-based weight hyperparams (SeriesSleepNet, Frontiers 2023)
-    adaptive_warmup: int = 5    # epochs with uniform weights before adapting
-    adaptive_K: float = 10.0    # log base for weight formula
+    # Adaptive F1-based weight hyperparams.
+    # adaptive_warmup 2 (April 2026): down from 5. Previously the
+    # reweighting only activated for the last 1-2 epochs before early
+    # stop, which had no measurable effect on Val N1 F1. With the
+    # val-source fix (trainer uses val per_class_f1, not train) the
+    # weights are safe to engage early — warmup=2 gives the EMA a
+    # first checkpoint, then lets the minority boost kick in.
+    adaptive_warmup: int = 2    # epochs with uniform weights before adapting
+    adaptive_K: float = 10.0    # coefficient for weight formula
     adaptive_gamma: float = 3.0  # exponent for weight formula
 
     # Class-balanced effective number (Cui et al. CVPR 2019)
@@ -145,11 +162,16 @@ class TrainConfig:
     # around epoch 13-17 on Sleep-EDF-20 (April 2026); 60 epochs gave
     # no MF1 gain over 30 in multiple runs. Increase for larger datasets.
     epochs: int = 30
-    lr: float = 1e-3
+    # lr 5e-4 (April 2026 plateau fix): mirror OptimizerConfig.lr. This
+    # is the scalar used by trainer._build_optimizer(self.config.lr);
+    # OptimizerConfig.lr is a documented placeholder only.
+    lr: float = 5e-4
     # Sampler inverse-frequency already gives N1 ~7x boost vs N2.
     # Extra n1_boost multiplies on top; 2.0 -> effective 14x (too noisy,
     # caused F1_N1 oscillation). 1.3 is a mild reinforcement that keeps
     # N1 presence without drowning the batch in N1-like patterns.
+    # April 2026: unchanged (adaptive_f1 reweighting is the main N1
+    # signal booster after val-source fix).
     n1_boost: float = 1.3
     # Patience 3: reduced from 5 (April 2026 step 2). p0_f0_m1_waf1
     # with self-loop GNN fix showed val MF1 peaking at epoch 4 (0.7759)
