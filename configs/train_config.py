@@ -101,7 +101,11 @@ class LossConfig:
     # floor and restores monotonic val-loss visibility; focal γ=2
     # already prevents over-confident logits without the full 0.10
     # smoothing.
-    label_smoothing: float = 0.05
+    # Ablation F (April 23 2026): ls 0.05 -> 0.0 to cut remaining
+    # drift floor. Baseline D (ahwkphem, ls=0.05 + nb=1.5): Test MF1
+    # hmm=0.8256, N1 hmm=0.5732, val_loss drift 0.52→0.59. Target:
+    # tighter val_loss + better logit calibration for post-proc.
+    label_smoothing: float = 0.0
 
     # --- Class weight strategy ---
     # "none"         : No class weights on focal loss (current default).
