@@ -101,11 +101,13 @@ class LossConfig:
     # floor and restores monotonic val-loss visibility; focal γ=2
     # already prevents over-confident logits without the full 0.10
     # smoothing.
-    # Ablation F (April 23 2026): ls 0.05 -> 0.0 to cut remaining
-    # drift floor. Baseline D (ahwkphem, ls=0.05 + nb=1.5): Test MF1
-    # hmm=0.8256, N1 hmm=0.5732, val_loss drift 0.52→0.59. Target:
-    # tighter val_loss + better logit calibration for post-proc.
-    label_smoothing: float = 0.0
+    # Ablation F (April 23 2026): tested ls=0.0 in run 29jw6tlq.
+    # Val_loss drift did shrink (min 0.43 vs 0.48) BUT test MF1 dropped
+    # across all post-proc methods: biased 0.8198 → 0.8137, hmm
+    # 0.8256 → 0.8239, N1 biased 0.5804 → 0.5648. ls=0.05 keeps logits
+    # calibrated enough for logit-bias / HMM to sharpen decisions.
+    # Reverted to 0.05.
+    label_smoothing: float = 0.05
 
     # --- Class weight strategy ---
     # "none"         : No class weights on focal loss (current default).
@@ -174,9 +176,13 @@ class N1MixupConfig:
     Defaults are deliberately conservative (prob=0.2, alpha=0.2) so the
     training signal stays mostly clean; aggressive mixup destabilised
     F1_N1 in early-stop runs (April 2026 sweep).
+
+    Ablation G (April 23 2026): prob 0.20 -> 0.25. Small probe on top
+    of best config D (n1_boost=1.5). Baseline D (ahwkphem): Test MF1
+    hmm=0.8256, N1 hmm=0.5732. Literature: mixup +N1 F1 ≈ 1–3pp.
     """
 
-    prob: float = 0.2         # per-batch probability of triggering mixup
+    prob: float = 0.25        # per-batch probability of triggering mixup
     alpha: float = 0.2        # Beta(α, α) — small α keeps λ near {0, 1}
     n1_class_id: int = 1
 
