@@ -68,12 +68,28 @@ def compute_adaptive_f1_weights(
         W_i = 1.0 + K * (1 - CF_i) ** gamma
     which is monotone and interpretable: CF=0.50 -> 1 + 10*0.125 = 2.25,
     CF=0.95 -> 1 + 10*0.000125 = 1.001. Low F1 classes get a meaningful
-    boost, high F1 classes keep weight ~1. Weights are normalised so
-    their mean is 1.0 to preserve overall loss magnitude.
+    boost, high F1 classes keep weight ~1.
+
+    April 22 2026 — CRITICAL FIX. The previous implementation divided
+    weights by their mean so the post-normalisation mean was exactly
+    1.0. In practice this meant: whenever ONE class was much harder
+    than the rest (e.g. N1 F1=0.44 with raw weight ~4.9 while the
+    other four classes sat at raw weight 1.0-1.7), the mean climbed
+    to ~2.0 and the four easy classes got divided DOWN to weights
+    0.5-0.8 — i.e. their gradient signal was HALVED. Observed effect
+    on run jzaveo41: Val MF1 peaked at epoch 2 (the first adaptive
+    epoch, 0.7604) and regressed to 0.69 on epoch 3 when mean-norm
+    kicked in; N3 F1 fell from 0.886 to 0.880, Wake F1 0.831 -> 0.772.
+    All non-N1 classes lost performance because they were being
+    under-trained. The fix is to remove the mean division entirely so
+    the raw formula (guaranteed >= 1.0) flows through, then clamp the
+    maximum to avoid runaway minority-class weights when F1 is near 0.
+    Every class now keeps at least a full gradient signal (w >= 1);
+    only the hard class receives a genuine boost on top.
     """
     f1 = np.clip(per_class_f1, 0.0, 1.0).astype(np.float64)
     weights = 1.0 + K * np.power(1.0 - f1, gamma)
-    weights = weights / (weights.mean() + 1e-8)
+    weights = np.clip(weights, 1.0, 5.0)
     return weights.astype(np.float32)
 
 

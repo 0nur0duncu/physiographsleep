@@ -65,20 +65,18 @@ class LossConfig:
     """Multi-task loss weights and focal loss settings."""
 
     stage_weight: float = 1.0
-    # April 22 2026 — AUX HEAD SURGERY. Live run (WandB a8yl5e0v)
-    # diagnostics showed prev/next head losses frozen at 0.70-0.78 for
-    # 18 consecutive epochs while their weighted contribution (0.035
-    # each) still accounted for 22 % of the total loss budget. The
-    # heads hit the label_smoothing floor and were back-propagating
-    # pure constant noise into the shared encoder — classic
-    # auxiliary-task saturation. Boundary head followed the same
-    # pattern (0.368 → 0.368). Setting prev/next to 0 removes the
-    # dead gradient entirely; boundary kept at 0.05 because the
-    # transition-memory block already encodes transitions and the
-    # direct binary signal is still informative for N1 disambiguation.
-    boundary_weight: float = 0.05
-    prev_stage_weight: float = 0.0
-    next_stage_weight: float = 0.0
+    # April 22 2026 — REVERTED aux-head zero experiment. The hypothesis
+    # that prev/next heads were dead (loss 0.70 for 18 epochs) was
+    # wrong: 0.70 is well BELOW random 5-class CE (1.61), i.e. the
+    # heads had converged and WERE providing regularisation on the
+    # shared encoder. Setting their weight to 0 on run jzaveo41 let
+    # their loss drift back to 1.79 (random init) AND dropped test MF1
+    # from 0.8230 to 0.8030. They were not dead, they were saturated
+    # useful signals. Restored to 0.05 each. Boundary head stays at
+    # 0.10 — it drives N1 boundary disambiguation directly.
+    boundary_weight: float = 0.10
+    prev_stage_weight: float = 0.05
+    next_stage_weight: float = 0.05
     n1_aux_weight: float = 0.30
     # GNN branch deep-supervision weight (only active when fusion is ON).
     # Without this, detach_gnn_for_lambda=True cuts all stage-loss gradient
@@ -120,14 +118,18 @@ class LossConfig:
     # weights are safe to engage early — warmup=2 gives the EMA a
     # first checkpoint, then lets the minority boost kick in.
     adaptive_warmup: int = 2    # epochs with uniform weights before adapting
-    # adaptive_K 20.0 (April 22 2026): up from 10.0. Live run showed
-    # N1 weight hovering at 1.68-1.85 for 18 epochs while N1 F1 was
-    # stuck at 0.48-0.53 — too weak to break the minority plateau.
-    # At K=20 the same F1=0.50 now yields weight 1 + 20*0.125 = 3.5
-    # (vs 2.25 before), giving the minority class a real push without
-    # destabilising the easy classes (their weights stay ~1.0 since
-    # (1-F1)^3 is tiny for F1≥0.85).
-    adaptive_K: float = 20.0    # coefficient for weight formula
+    # adaptive_K 10.0 (April 22 2026 — second revision): lowered from
+    # 20.0. The original K=20 choice was compensating for the mean
+    # normalisation in compute_adaptive_f1_weights which divided every
+    # class weight by the batch mean — a bug that silently halved the
+    # gradient signal on every non-minority class and caused the
+    # observed ValMF1 regression on run jzaveo41 (0.7604 @ epoch 2 ->
+    # 0.6913 @ epoch 3). With mean-normalisation removed and weights
+    # clamped to [1.0, 5.0], K=10 now yields a clean profile: N1 at
+    # F1=0.43 gets w=3.7x, W/N2 at F1=0.79 get w=1.2x, N3 at F1=0.86
+    # gets w=1.05x. Every class keeps at least a full gradient while
+    # the minority receives a genuine ~4x boost — no silent damping.
+    adaptive_K: float = 10.0    # coefficient for weight formula
     adaptive_gamma: float = 3.0  # exponent for weight formula
 
     # Class-balanced effective number (Cui et al. CVPR 2019)
