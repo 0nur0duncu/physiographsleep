@@ -7,13 +7,15 @@ from dataclasses import dataclass, field
 class OptimizerConfig:
     """AdamW optimizer settings."""
 
-    # lr 5e-4 (April 2026 plateau fix): down from 1e-3 because training
-    # curve (7-epoch rerun) showed train loss 1.44 -> 0.41 while Val MF1
-    # saturated at 0.77 from epoch 1 and Val N1 F1 flat at 0.50. At
-    # 1e-3 with warmup=3 the optimiser hits peak LR in ~1380 steps and
-    # memorises the easy classes before the regulariser stack (focal +
-    # ls=0.10 + wd=8e-2 + decoder dropout 0.3/0.5) can shape gradients.
-    lr: float = 5e-4
+    # lr 3e-4 (April 22 2026 gradual-learning fix): down from peak 1e-3.
+    # Live run showed Val MF1 0.76 @epoch2 → 0.73 @epoch3 exactly when
+    # warmup hit 6e-4 (still ramping). Train MF1 kept climbing to 0.81
+    # while val froze → classic "LR too high for capacity" collapse for
+    # a 584K model. 3e-4 is the AdamW sweet spot for this scale (see
+    # Karpathy nanoGPT / LLaMA recipe) and lets the 10-epoch warmup end
+    # at a value the regulariser stack (dropout, prototype_noise,
+    # wd=8e-2, focal+ls) can still shape.
+    lr: float = 3e-4
     # weight_decay 4e-2: increased from 2e-2 (April 2026) after
     # p1_f1_m1_waf1 showed 17.4 pp train-val MF1 generalization gap
     # (train 0.9541 / val 0.7801) + fitted T=1.087 via temperature
@@ -43,17 +45,20 @@ class SchedulerConfig:
     in SleepTransformer / AttnSleep / ViT literature.
     """
 
-    # t_max 30: 20-epoch Sleep-EDF-20 runs (April 2026) show val MF1
-    # plateauing after epoch ~13 (ΔMF1 < 0.005 per epoch). 60 epoch
-    # cosine tail was 2× wasted compute with no measurable MF1 gain.
-    t_max: int = 30
+    # t_max 40 (April 22 2026): with lr=3e-4 and warmup=10 the cosine
+    # decay tail starts at epoch 10 and has 30 epochs to anneal to
+    # eta_min. Live run showed the model was improving monotonically
+    # when early-stop killed it at epoch 5 — we simply didn't give it
+    # enough runway. 40 is cheap on T4 (~80s/epoch = ~55 min).
+    t_max: int = 40
     eta_min: float = 1e-6
-    # warmup 5 (April 2026): up from 3. With lr 1e-3 and warmup 3 the
-    # first 1380 steps hit peak LR, which drove train loss 1.44 -> 0.72
-    # in a single epoch and Val MF1 to saturate immediately. 5 epochs
-    # of linear ramp lets the regulariser stack (dropout, prototype
-    # noise, ls) actually shape the gradient landscape before peak.
-    warmup_epochs: int = 5
+    # warmup 10 (April 22 2026): up from 5. Live run diagnostic:
+    # epoch 3 @ lr=6.04e-4 → ValMF1 0.76→0.73 collapse. Warmup=5 was
+    # too aggressive — val broke DURING warmup. 10 epochs (25% of
+    # budget) is the LLaMA / ViT standard; gradient landscape has time
+    # to stabilise before LR passes the 2e-4 danger zone where this
+    # model started overfitting.
+    warmup_epochs: int = 10
 
 
 @dataclass
@@ -157,15 +162,14 @@ class TrainConfig:
     # Set `n1_mixup=None` to disable the augmentation (used by ablation).
     n1_mixup: N1MixupConfig | None = field(default_factory=N1MixupConfig)
 
-    # Single training schedule
-    # epochs 30: matches scheduler.t_max. Empirically val MF1 plateaus
-    # around epoch 13-17 on Sleep-EDF-20 (April 2026); 60 epochs gave
-    # no MF1 gain over 30 in multiple runs. Increase for larger datasets.
-    epochs: int = 30
-    # lr 5e-4 (April 2026 plateau fix): mirror OptimizerConfig.lr. This
-    # is the scalar used by trainer._build_optimizer(self.config.lr);
-    # OptimizerConfig.lr is a documented placeholder only.
-    lr: float = 5e-4
+    # epochs 50: matches scheduler.t_max=40 + 10 epoch safety margin.
+    # Early stopping (patience=10) will cut it short if val truly
+    # plateaus; otherwise the extra budget lets cosine annealing
+    # actually reach eta_min=1e-6 where fine refinement happens.
+    epochs: int = 50
+    # lr 3e-4 (April 22 2026): mirror OptimizerConfig.lr. trainer reads
+    # from TrainConfig.lr.
+    lr: float = 3e-4
     # Sampler inverse-frequency already gives N1 ~7x boost vs N2.
     # Extra n1_boost multiplies on top; 2.0 -> effective 14x (too noisy,
     # caused F1_N1 oscillation). 1.3 is a mild reinforcement that keeps
@@ -173,13 +177,13 @@ class TrainConfig:
     # April 2026: unchanged (adaptive_f1 reweighting is the main N1
     # signal booster after val-source fix).
     n1_boost: float = 1.3
-    # Patience 3: reduced from 5 (April 2026 step 2). p0_f0_m1_waf1
-    # with self-loop GNN fix showed val MF1 peaking at epoch 4 (0.7759)
-    # then plateau-to-drift while train MF1 kept climbing (0.85 → 0.88).
-    # Val loss rose monotonically from epoch 3. Earlier stop captures
-    # peak checkpoint before overfit widens; EMA smooths the selection.
-    # Revert to 5 only if early false-plateau cycles appear.
-    patience: int = 3
+    # Patience 10 (April 22 2026): up from 3. Live run ground truth:
+    # epoch 2 was best (0.7629), epochs 3-5 were a WARMUP GLITCH at
+    # LR=6-10e-4, NOT a real plateau. patience=3 killed the run during
+    # a transient LR shock. With lr=3e-4 + warmup=10 we want the model
+    # to survive 8-10 noisy epochs before declaring plateau. EMA-based
+    # best-checkpoint saving means we never lose a good weight.
+    patience: int = 10
     # Exponential Moving Average of model weights. SleepTransformer /
     # XSleepNet standard: stabilises val metrics + adds ~0.01-0.02 MF1.
     ema_decay: float = 0.999

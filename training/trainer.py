@@ -525,17 +525,6 @@ class Trainer:
                     train_metrics=train_metrics or {}, val_metrics=metrics,
                     diagnostics=diagnostics or {},
                 )
-            except TypeError:
-                # Back-compat with callbacks that don't accept diagnostics.
-                try:
-                    self.callback(
-                        epoch=epoch,
-                        train_loss=loss, val_loss=val_loss,
-                        train_metrics=train_metrics or {},
-                        val_metrics=metrics,
-                    )
-                except Exception as exc:  # pragma: no cover
-                    logger.warning(f"Callback failed: {exc}")
             except Exception as exc:  # pragma: no cover
                 logger.warning(f"Callback failed: {exc}")
 
