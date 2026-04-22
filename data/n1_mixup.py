@@ -56,17 +56,28 @@ def apply_n1_mixup(
     labels = batch["label"]
     device = labels.device
 
-    # Stochastic activation per batch
-    if torch.rand(1, device=device).item() > cfg.prob:
+    # Stochastic activation per batch.
+    # NOTE: Python scalar comparison against `cfg.prob` requires a
+    # CPU sync — but this is the ONE intentional sync per batch (vs the
+    # three we had before). Generating the bernoulli on CPU avoids a
+    # device→host round-trip entirely.
+    import random
+    if random.random() > cfg.prob:
         return batch, None
 
     n1_mask = labels == cfg.n1_class_id
-    other_mask = ~n1_mask
-    if n1_mask.sum().item() == 0 or other_mask.sum().item() == 0:
+    # Sync-free emptiness check: compute counts on GPU and keep them as
+    # tensors. We only force a sync when we actually need the indices.
+    n1_count = n1_mask.sum()
+    other_count = (~n1_mask).sum()
+    # Single sync via .item() for the branch decision (replaces the
+    # previous double-sync of `.sum().item()` on both masks).
+    counts = torch.stack([n1_count, other_count]).tolist()
+    if counts[0] == 0 or counts[1] == 0:
         return batch, None
 
     n1_idx = torch.nonzero(n1_mask, as_tuple=False).flatten()
-    other_pool = torch.nonzero(other_mask, as_tuple=False).flatten()
+    other_pool = torch.nonzero(~n1_mask, as_tuple=False).flatten()
 
     # Random partner from the other-class pool for each N1 sample
     perm = torch.randint(0, other_pool.numel(), (n1_idx.numel(),), device=device)

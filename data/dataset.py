@@ -20,13 +20,44 @@ ANNOTATION_MAP = {
 STAGE_NAMES = ["W", "N1", "N2", "N3", "REM"]
 
 
-def get_subject_ids(num_subjects: int = 20) -> list[str]:
-    """Return sorted subject IDs for Sleep-EDF-20 SC.
+def get_subject_ids(num_subjects: int | None = 20) -> list[str]:
+    """Return sorted subject IDs for Sleep-EDF SC.
 
-    File naming: SC4SSNE0-PSG.edf where SS=subject(00-19), N=night(1-2).
-    Subject ID = first 5 chars = 'SC4SS', e.g. SC400, SC401, ..., SC419.
+    File naming: SC4SSNE0-PSG.edf where SS=subject(00-82), N=night(1-2).
+    Subject ID = first 5 chars = 'SC4SS', e.g. SC400, SC401, ..., SC482.
+
+    Args:
+        num_subjects: 20 → Sleep-EDF-20 (ilk 20 subject, SC400-SC419).
+                      78 veya daha büyük → Sleep-EDF Expanded (ilk N).
+                      None → klasördeki tüm mevcut subject'leri döndür
+                             (discover_subject_ids() kullan).
+
+    Not: Sleep-EDF-78'de bazı subject'ler eksiktir (örn. SC436, SC452,
+    SC468, SC479). Dosya gerçekten var mı kontrolü `_load_all_subjects`
+    içinde `data_dir.glob("SC*-PSG.edf")` ile otomatik yapılır; bu
+    fonksiyon sadece "aranacak" ID listesini üretir.
     """
+    if num_subjects is None:
+        # Auto-discover, caller responsible for calling discover_subject_ids
+        # with the actual data_dir. Fallback: 83 candidate IDs.
+        num_subjects = 83
     return [f"SC4{i:02d}" for i in range(num_subjects)]
+
+
+def discover_subject_ids(data_dir: Path) -> list[str]:
+    """Scan the Sleep-EDF data directory and return actual subject IDs
+    present on disk. Handles Sleep-EDF-78 where some subjects are
+    missing / corrupt.
+
+    Args:
+        data_dir: Directory containing SC*-PSG.edf files.
+
+    Returns:
+        Sorted unique subject IDs (first 5 chars of PSG filenames).
+    """
+    data_dir = Path(data_dir)
+    psg_files = sorted(data_dir.glob("SC*-PSG.edf"))
+    return sorted({p.name[:5] for p in psg_files})
 
 
 def split_subjects(

@@ -216,8 +216,14 @@ class Trainer:
         ema: ModelEMA | None = None,
     ) -> tuple[float, np.ndarray, np.ndarray]:
         self.model.train()
-        total_loss = 0.0
+        # GPU-accumulated loss avoids one `cudaDeviceSynchronize` per batch
+        # (previously `.item()` inside the hot loop was costing ~460 syncs
+        # per EDF-20 epoch). We sync once at the end of the epoch instead.
+        total_loss_gpu = torch.zeros((), device=self.device)
         num_batches = 0
+        import time as _time
+        t0 = _time.time()
+        n_samples = 0
 
         pbar = tqdm(loader, desc="Train", leave=False)
         gpu_preds: list[torch.Tensor] = []
@@ -274,15 +280,26 @@ class Trainer:
                 if ema is not None:
                     ema.update(self.model)
 
-            total_loss += losses["total"].item()
+            total_loss_gpu += losses["total"].detach()
             num_batches += 1
-            pbar.set_postfix(loss=f"{total_loss/num_batches:.4f}")
+            n_samples += signals.shape[0]
+            # tqdm postfix updates are rate-limited by tqdm itself; we only
+            # sync every 20 batches to keep the bar informative without
+            # killing pipelining.
+            if num_batches % 20 == 0:
+                pbar.set_postfix(loss=f"{(total_loss_gpu.item()/num_batches):.4f}")
 
             with torch.no_grad():
                 gpu_preds.append(predictions["stage"].argmax(dim=1).detach())
                 gpu_labels.append(targets["label"].detach())
 
-        mean_loss = total_loss / max(num_batches, 1)
+        mean_loss = float(total_loss_gpu.item()) / max(num_batches, 1)
+        elapsed = _time.time() - t0
+        if elapsed > 0 and n_samples > 0:
+            logger.debug(
+                f"  train throughput: {n_samples/elapsed:.0f} samples/s "
+                f"({num_batches} batches in {elapsed:.1f}s)"
+            )
         all_preds = torch.cat(gpu_preds).cpu().numpy()
         all_labels = torch.cat(gpu_labels).cpu().numpy()
         return mean_loss, all_preds, all_labels

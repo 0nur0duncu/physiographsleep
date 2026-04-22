@@ -111,6 +111,10 @@ def run_one_fold(
     config.seed = base_args.seed + fold_idx  # different init per fold
     config.data.batch_size = base_args.batch_size
     config.train.epochs = base_args.epochs
+    # Propagate num_subjects so any fold-level code sees the same
+    # dataset size (EDF-20 vs EDF-78) as the outer loader.
+    if getattr(base_args, "num_subjects", None) is not None:
+        config.data.num_subjects = base_args.num_subjects
 
     set_seed(config.seed)
     device = get_device(base_args.device)
@@ -208,6 +212,11 @@ def main() -> None:
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument(
+        "--num-subjects", type=int, default=None,
+        help="Override config.data.num_subjects (20 = Sleep-EDF-20, "
+             "78 = Sleep-EDF Expanded). Default: use config default (20).",
+    )
     parser.add_argument("--log-dir", type=str, default="logs/cv")
     parser.add_argument("--out", type=str, default="outputs/cv_results.jsonl")
     parser.add_argument("--start-fold", type=int, default=0)
@@ -219,6 +228,12 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     config = ExperimentConfig()
+    if args.num_subjects is not None:
+        config.data.num_subjects = args.num_subjects
+    print(
+        f"CV runner: num_subjects={config.data.num_subjects}, "
+        f"folds={args.folds}, epochs={args.epochs}"
+    )
     print("Loading per-subject data (one-time cache build)...")
     per_subj = load_sleep_edf_per_subject(config.data)
     subject_ids = sorted(per_subj.keys())

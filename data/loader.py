@@ -12,7 +12,7 @@ import numpy as np
 from tqdm import tqdm
 
 from ..configs.data_config import DataConfig
-from ..data.dataset import ANNOTATION_MAP, split_subjects, get_subject_ids
+from ..data.dataset import ANNOTATION_MAP, split_subjects, get_subject_ids, discover_subject_ids
 from ..data.download import ensure_dataset
 
 # Suppress noisy warnings
@@ -39,10 +39,35 @@ def _find_edf_dir(data_dir: Path) -> Path:
     return data_dir
 
 
+def _resolve_subject_ids(config: DataConfig) -> tuple[list[str], str]:
+    """Resolve the list of subject IDs to load plus a cache tag.
+
+    - num_subjects = 20 → Sleep-EDF-20 (first 20 SC IDs, tag='edf20')
+    - num_subjects = 78 or larger → Sleep-EDF Expanded; on-disk auto-detect
+      limited to at most num_subjects, tag=f'edf{N}' where N is the
+      actual count found (<= num_subjects).
+    - num_subjects = None → discover all available subjects, tag=f'edf{N}'.
+
+    Returns:
+        (subject_ids, cache_tag)
+    """
+    data_dir = _find_edf_dir(Path(config.data_dir))
+    if config.num_subjects == 20:
+        return get_subject_ids(20), "edf20"
+    # For 78+ or None, rely on disk discovery (handles missing subjects).
+    available = discover_subject_ids(data_dir)
+    if config.num_subjects is not None and config.num_subjects < len(available):
+        available = available[: config.num_subjects]
+    tag = f"edf{len(available)}"
+    return available, tag
+
+
 def load_sleep_edf(config: DataConfig) -> dict[str, dict[str, np.ndarray]]:
-    """Load and preprocess Sleep-EDF-20 data.
+    """Load and preprocess Sleep-EDF (20 or 78) data.
 
     Downloads dataset if not present. Returns cached data if available.
+    Cache key includes the dataset size tag (edf20 / edf78 / edfN) so
+    Sleep-EDF-20 and Sleep-EDF-78 caches never collide.
 
     Returns:
         dict with 'train', 'val', 'test' keys, each containing:
@@ -53,30 +78,39 @@ def load_sleep_edf(config: DataConfig) -> dict[str, dict[str, np.ndarray]]:
     cache_dir = Path(config.cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Cache key includes channel + EOG state so EEG-only and EEG+EOG caches
-    # never collide. Switching `use_eog` automatically forces re-extraction.
+    # Ensure dataset is on disk BEFORE resolving subject ids (needed to
+    # discover actual SC*-PSG.edf presence for Sleep-EDF-78 where some
+    # subjects are missing).
+    ensure_dataset(data_dir=config.data_dir, study="SC")
+    subject_ids, ds_tag = _resolve_subject_ids(config)
+
     eog_tag = "_eog" if config.use_eog else ""
     cache_file = cache_dir / (
-        f"sleepedf20_ch{config.channel.replace(' ', '_')}{eog_tag}"
+        f"sleep{ds_tag}_ch{config.channel.replace(' ', '_')}{eog_tag}"
         f"_wt{config.wake_trim_minutes}.npz"
     )
     if cache_file.exists():
         return _load_from_cache(cache_file)
 
-    # Ensure dataset is downloaded
-    ensure_dataset(data_dir=config.data_dir, study="SC")
-
-    # Load raw data
-    subject_ids = get_subject_ids(config.num_subjects)
+    # Split subjects — uses config.train_subjects / config.val_subjects
+    # for the 15/3/2 convention on EDF-20 and scaled proportionally if
+    # subject_ids is larger.
+    if len(subject_ids) > config.train_subjects + config.val_subjects + 1:
+        # Scale train/val/test counts proportionally for EDF-78.
+        n = len(subject_ids)
+        train_n = max(1, int(round(n * config.train_subjects / 20)))
+        val_n = max(1, int(round(n * config.val_subjects / 20)))
+        # Ensure at least 1 test subject remains.
+        train_n = min(train_n, n - val_n - 1)
+    else:
+        train_n = config.train_subjects
+        val_n = config.val_subjects
     splits = split_subjects(
-        subject_ids,
-        train_n=config.train_subjects,
-        val_n=config.val_subjects,
-        seed=config.seed,
+        subject_ids, train_n=train_n, val_n=val_n, seed=config.seed,
     )
 
     data_dir = _find_edf_dir(Path(config.data_dir))
-    print(f"Loading EDF files from: {data_dir}")
+    print(f"Loading EDF files from: {data_dir} ({ds_tag}, {len(subject_ids)} subjects)")
     needed_subjects = set(subject_ids)
     all_epochs, all_labels = _load_all_subjects(data_dir, config, needed_subjects)
 
@@ -126,9 +160,13 @@ def load_sleep_edf_per_subject(
     """
     cache_dir = Path(config.cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
+
+    ensure_dataset(data_dir=config.data_dir, study="SC")
+    subject_ids, ds_tag = _resolve_subject_ids(config)
+
     eog_tag = "_eog" if config.use_eog else ""
     cache_file = cache_dir / (
-        f"sleepedf20_persubj_ch{config.channel.replace(' ', '_')}{eog_tag}"
+        f"sleep{ds_tag}_persubj_ch{config.channel.replace(' ', '_')}{eog_tag}"
         f"_wt{config.wake_trim_minutes}.npz"
     )
     if cache_file.exists():
@@ -146,8 +184,9 @@ def load_sleep_edf_per_subject(
             result[sid] = entry
         return result
 
-    ensure_dataset(data_dir=config.data_dir, study="SC")
-    subject_ids = get_subject_ids(config.num_subjects)
+    # subject_ids + cache_tag already resolved above (needed for cache key);
+    # re-use the same resolution here so both code paths see the same list.
+    # NOTE: ensure_dataset was already called before the cache check.
     data_dir = _find_edf_dir(Path(config.data_dir))
     needed = set(subject_ids)
     all_epochs, all_labels = _load_all_subjects(data_dir, config, needed)

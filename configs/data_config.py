@@ -1,7 +1,31 @@
 """Data pipeline configuration."""
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+def _default_num_workers() -> int:
+    """Auto-select num_workers based on platform.
+
+    Linux/macOS (including Colab): 2 — DataLoader workers run in parallel,
+    augmentation + tensor conversion overlap with GPU forward/backward.
+    Windows: 0 — `spawn` start method has heavy overhead and often hangs
+    with small datasets; main-thread loading is faster in practice.
+    """
+    return 0 if sys.platform.startswith("win") else 2
+
+
+def _default_batch_size() -> int:
+    """Default batch size. 64 saturates T4/V100 for this 584K-param model
+    without exceeding ~30% VRAM at seq_len=25. Keep 32 on CPU-only runs
+    where VRAM isn't the bottleneck but convergence stability is.
+    """
+    try:
+        import torch  # local import to avoid hard dependency at config parse
+        return 64 if torch.cuda.is_available() else 32
+    except ImportError:
+        return 32
 
 
 @dataclass
@@ -13,7 +37,14 @@ class DataConfig:
     cache_dir: str = "physiographsleep/dataset/cache"
 
     # Dataset
-    num_subjects: int = 20
+    # num_subjects: 20 → Sleep-EDF-20 (SC400..SC419 ilk 20 subject)
+    #                78 → Sleep-EDF-78 Expanded (tüm SC4** auto-detected,
+    #                     eksik/hatalı dosyalar atlanır, ~78 geçerli subject)
+    #                None → downloaded sleep-cassette klasöründeki tüm
+    #                     geçerli subject'leri kullan (esnek mod).
+    # Cache anahtarı num_subjects ile parametrize — EDF-20 ve EDF-78
+    # önbellekleri birbirine çarpışmaz.
+    num_subjects: int | None = 20
     channel: str = "EEG Fpz-Cz"
     use_eog: bool = False
     sampling_rate: int = 100
@@ -72,8 +103,10 @@ class DataConfig:
     dc_shift_std: float = 0.1
 
     # Loading
-    batch_size: int = 32
-    num_workers: int = 0
+    # batch_size: T4/V100 için 64 (model 584K param, seq_len=25 → ~10 MB/batch).
+    # Linux/Colab'da workers paralel, Windows'ta spawn overhead nedeniyle 0.
+    batch_size: int = field(default_factory=_default_batch_size)
+    num_workers: int = field(default_factory=_default_num_workers)
     pin_memory: bool = True
 
     @property
