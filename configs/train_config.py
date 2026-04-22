@@ -72,9 +72,10 @@ class LossConfig:
     # shared encoder. Setting their weight to 0 on run jzaveo41 let
     # their loss drift back to 1.79 (random init) AND dropped test MF1
     # from 0.8230 to 0.8030. They were not dead, they were saturated
-    # useful signals. Restored to 0.05 each. Boundary head stays at
-    # 0.10 — it drives N1 boundary disambiguation directly.
-    boundary_weight: float = 0.10
+    # useful signals. Restored to 0.05 each. Boundary head drives N1
+    # boundary disambiguation directly; ablation C bumps 0.10 -> 0.15
+    # (baseline owxw7cdg @ 0.10 gave Test MF1 biased=0.8243, N1=0.5781).
+    boundary_weight: float = 0.15
     prev_stage_weight: float = 0.05
     next_stage_weight: float = 0.05
     n1_aux_weight: float = 0.30
