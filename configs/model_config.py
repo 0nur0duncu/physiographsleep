@@ -111,11 +111,27 @@ class SequenceDecoderConfig:
     input_dim: int = 128
     gru_hidden: int = 80
     gru_layers: int = 1
-    gru_dropout: float = 0.3
+    # gru_dropout 0.5 (April 2026 overfit fix): raised from 0.3 after
+    # physiographsleep.log showed 17 pp train/val MF1 gap (train 0.97 /
+    # val 0.80) on Sleep-EDF-20. Single-layer BiGRU's internal
+    # `dropout=` arg is inert (PyTorch applies it only between stacked
+    # layers), so the *only* regularizer on the 130K-param GRU output
+    # is this external nn.Dropout. 0.5 matches DeepSleepNet's BiLSTM
+    # setting. Revert to 0.3 if Val MF1 drops > 1 pp.
+    gru_dropout: float = 0.5
     tcn_kernel: int = 3
     num_prototypes: int = 5  # one per sleep stage
+    # prototype_noise_std 0.05 (April 2026 overfit fix): Gaussian noise
+    # added to the 5 learnable transition prototypes at train time. The
+    # 5 * hidden_dim prototypes are a prime subject-memorization surface
+    # (learnable nn.Parameter, no other regularizer). Random perturbation
+    # during training acts as an ensemble over prototype slightly-shifted
+    # variants; disabled at eval (self.training gate).
+    prototype_noise_std: float = 0.05
     output_dim: int = 160
-    dropout: float = 0.2
+    # dropout 0.3 (April 2026 overfit fix): up from 0.2 for TemporalConv,
+    # TransitionMemory cross-attn, and final projection.
+    dropout: float = 0.3
 
 
 @dataclass

@@ -51,9 +51,20 @@ class TransitionMemoryBlock(nn.Module):
     to produce transition-aware representations.
     """
 
-    def __init__(self, dim: int, num_prototypes: int = 5, num_heads: int = 4, dropout: float = 0.1):
+    def __init__(
+        self,
+        dim: int,
+        num_prototypes: int = 5,
+        num_heads: int = 4,
+        dropout: float = 0.1,
+        prototype_noise_std: float = 0.0,
+    ):
         super().__init__()
         self.prototypes = nn.Parameter(torch.randn(num_prototypes, dim) * 0.02)
+        # Prototype noise injection at train time acts as an implicit
+        # ensemble over shifted prototype variants and dampens subject-
+        # specific transition memorization.
+        self.prototype_noise_std = float(prototype_noise_std)
 
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=dim,
@@ -76,6 +87,9 @@ class TransitionMemoryBlock(nn.Module):
 
         # Expand prototypes for batch: (B, 5, D)
         prototypes = self.prototypes.unsqueeze(0).expand(B, -1, -1)
+        if self.training and self.prototype_noise_std > 0.0:
+            noise = torch.randn_like(prototypes) * self.prototype_noise_std
+            prototypes = prototypes + noise
 
         # Cross-attention: queries=sequence, keys/values=prototypes
         attn_out, _ = self.cross_attn(
@@ -120,6 +134,7 @@ class SequenceTransitionDecoder(nn.Module):
             dim=gru_out_dim,
             num_prototypes=config.num_prototypes,
             dropout=config.dropout,
+            prototype_noise_std=getattr(config, "prototype_noise_std", 0.0),
         )
 
         # Final projection

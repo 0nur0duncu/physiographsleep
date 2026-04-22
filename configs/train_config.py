@@ -14,7 +14,9 @@ class OptimizerConfig:
     # scaling — calibration was fine, divergence was true overfit.
     # 5e-2 previously caused a 6-point regression (under-fit); 4e-2
     # is the midpoint. Revert to 2e-2 if val MF1 drops >0.5 pp.
-    weight_decay: float = 4e-2
+    # April 2026 overfit rerun: raised 4e-2 -> 8e-2 together with
+    # decoder dropout 0.3/0.5 + prototype noise + aux-loss cut.
+    weight_decay: float = 8e-2
     betas: tuple[float, float] = (0.9, 0.999)
     # grad_clip=5.0 matches AttnSleep/SleepTransformer; 1.0 was too
     # aggressive under AdamW + bfloat16 AMP (suppresses legitimate
@@ -48,9 +50,16 @@ class LossConfig:
     """Multi-task loss weights and focal loss settings."""
 
     stage_weight: float = 1.0
-    boundary_weight: float = 0.35
-    prev_stage_weight: float = 0.20
-    next_stage_weight: float = 0.20
+    # Auxiliary head weights lowered April 2026 after overfit audit:
+    # boundary/prev/next heads are random-init and their gradients
+    # flow back into the shared encoder, consuming encoder capacity
+    # on near-random targets and contributing to the 17 pp train/val
+    # MF1 gap. Keeping them non-zero preserves the regularization
+    # signal (boundary saliency, adjacency consistency) without the
+    # previous 45 % of the loss budget going to auxiliary tasks.
+    boundary_weight: float = 0.10
+    prev_stage_weight: float = 0.05
+    next_stage_weight: float = 0.05
     n1_aux_weight: float = 0.30
     # GNN branch deep-supervision weight (only active when fusion is ON).
     # Without this, detach_gnn_for_lambda=True cuts all stage-loss gradient
@@ -65,7 +74,9 @@ class LossConfig:
     # eder → cross-entropy bileşeni bunu cezalandırır.
     # Best-checkpoint MF1 ile seçildiğinden (loss değil) pratik sorun yok.
     # ls=0.05 ileride bir ablation olarak test edilebilir.
-    label_smoothing: float = 0.05
+    # April 2026: overfit audit raised ls 0.05 -> 0.10 to blunt the
+    # overconfident logits that drive train MF1 towards 0.97.
+    label_smoothing: float = 0.10
 
     # --- Class weight strategy ---
     # "none"         : No class weights on focal loss (current default).
