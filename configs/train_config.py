@@ -73,9 +73,10 @@ class LossConfig:
     # their loss drift back to 1.79 (random init) AND dropped test MF1
     # from 0.8230 to 0.8030. They were not dead, they were saturated
     # useful signals. Restored to 0.05 each. Boundary head drives N1
-    # boundary disambiguation directly; ablation C bumps 0.10 -> 0.15
-    # (baseline owxw7cdg @ 0.10 gave Test MF1 biased=0.8243, N1=0.5781).
-    boundary_weight: float = 0.15
+    # boundary disambiguation directly; ablation C tested 0.15 in run
+    # 4lmvw7zc → Test MF1 biased 0.8243 → 0.8136, N1 0.578 → 0.559
+    # (net harm: boundary budget crowded out stage head). Reverted to 0.10.
+    boundary_weight: float = 0.10
     prev_stage_weight: float = 0.05
     next_stage_weight: float = 0.05
     n1_aux_weight: float = 0.30
@@ -208,9 +209,10 @@ class TrainConfig:
     # Extra n1_boost multiplies on top; 2.0 -> effective 14x (too noisy,
     # caused F1_N1 oscillation). 1.3 is a mild reinforcement that keeps
     # N1 presence without drowning the batch in N1-like patterns.
-    # April 2026: unchanged (adaptive_f1 reweighting is the main N1
-    # signal booster after val-source fix).
-    n1_boost: float = 1.3
+    # Ablation D (April 23 2026): bumped 1.3 -> 1.5 to probe extra N1
+    # sampling margin. Baseline (owxw7cdg @ 1.3): Test MF1 biased=0.8243,
+    # N1=0.5781. If this regresses like ablation C, revert.
+    n1_boost: float = 1.5
     # Patience 10 (April 22 2026): up from 3. Live run ground truth:
     # epoch 2 was best (0.7629), epochs 3-5 were a WARMUP GLITCH at
     # LR=6-10e-4, NOT a real plateau. patience=3 killed the run during
